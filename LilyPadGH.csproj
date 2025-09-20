@@ -78,6 +78,9 @@
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
   </ItemGroup>
+  <ItemGroup>
+    <Folder Include="JuliaPackage\" />
+  </ItemGroup>
 
   <!-- Post-build deployment - Compatible with VS Code and Visual Studio Professional -->
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
@@ -110,5 +113,13 @@
     <StartArguments>/nosplash</StartArguments>
     <StartWorkingDirectory>$(ProjectDir)</StartWorkingDirectory>
   </PropertyGroup>
+
+	<!-- Julia Package -->
+	<ItemGroup>
+		<Content Include="JuliaPackage\julia-1.11.7-win64\**">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+	</ItemGroup>
+	
 
 </Project>
