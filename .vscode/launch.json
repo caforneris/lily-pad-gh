@@ -1,0 +1,42 @@
+{
+  "version": "1.0.5",
+  "configurations": [
+    {
+      "name": "Debug Rhino 8",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "C:\\Program Files\\Rhino 8\\System\\Rhino.exe",
+      "args": [
+        "/netcore",
+        "/nosplash",
+        "/notemplate",
+        "/runscript=\"_Grasshopper\""
+      ],
+      "preLaunchTask": "build for rhino 8",
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "justMyCode": true,
+      "logging": {
+        "moduleLoad": false
+      },
+      "env": {}
+    },
+    {
+      "name": "Release Rhino 8",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "C:\\Program Files\\Rhino 8\\System\\Rhino.exe",
+      "args": [
+        "/netcore",
+        "/nosplash",
+        "/notemplate",
+        "/runscript=\"_Grasshopper\""
+      ],
+      "preLaunchTask": "release for rhino 8",
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "justMyCode": true
+    }
+  ]
+}

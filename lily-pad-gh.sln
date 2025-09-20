@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LilyPadGH", "LilyPadGH.csproj", "{38ADAC40-CC2C-837F-7556-EF6F41C880D1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {2030021D-CC1B-4B97-B417-94E3CD55789C}
+	EndGlobalSection
+EndGlobal
