@@ -1,4 +1,4 @@
-using WaterLily, Plots, JSON, StaticArrays
+using WaterLily, Plots, JSON, StaticArrays, ParametricBodies
 
 # Set the plots backend for better compatibility
 gr() # Use GR backend for plotting
@@ -20,138 +20,169 @@ function read_geometry_data(boundary_json_path, curve_json_path=nothing)
     return boundary_data, curve_data
 end
 
-# Function to create exact polyline body from curve points
+# Function to create smooth NURBS body using ParametricBodies.jl interpNurbs
 function create_polyline_body(curve_points, boundary_data)
-    # Extract x,y coordinates from the curve points and convert to Float32
-    x_coords = Float32[p["x"] for p in curve_points]
-    y_coords = Float32[p["y"] for p in curve_points]
+    # Convert points to Float32 arrays
+    points_x = Float32[p["x"] for p in curve_points]
+    points_y = Float32[p["y"] for p in curve_points]
 
-    # Always ensure the polyline is properly closed by adding the first point at the end
-    # This guarantees a closed polygon for the signed distance function
-    if length(x_coords) > 0
-        # Check if already closed (within a small tolerance)
-        dx = abs(x_coords[1] - x_coords[end])
-        dy = abs(y_coords[1] - y_coords[end])
-        tolerance = 1e-6
-
-        if dx > tolerance || dy > tolerance
-            push!(x_coords, x_coords[1])
-            push!(y_coords, y_coords[1])
-            println("Closed polyline: added closing segment from ($(x_coords[end-1]), $(y_coords[end-1])) to ($(x_coords[end]), $(y_coords[end]))")
-        else
-            println("Polyline was already closed within tolerance")
-        end
+    # Ensure we have a proper closed polygon - remove any duplicate closing point first
+    if length(points_x) > 0 && abs(points_x[1] - points_x[end]) < 1e-6 && abs(points_y[1] - points_y[end]) < 1e-6
+        pop!(points_x)
+        pop!(points_y)
+        println("Removed duplicate closing point")
     end
 
-    println("Created exact closed polyline with $(length(x_coords)) points")
-    println("Polyline bounds: X[$(minimum(x_coords)), $(maximum(x_coords))], Y[$(minimum(y_coords)), $(maximum(y_coords))]")
-    println("First point: ($(x_coords[1]), $(y_coords[1]))")
-    println("Last point: ($(x_coords[end]), $(y_coords[end]))")
-    println("Closed: $(x_coords[1] == x_coords[end] && y_coords[1] == y_coords[end])")
+    n_points = length(points_x)
+    println("Creating interpNurbs ParametricBody with $n_points unique points")
+    println("Polyline bounds: X[$(minimum(points_x)), $(maximum(points_x))], Y[$(minimum(points_y)), $(maximum(points_y))]")
+    println("First point: $(points_x[1]), $(points_y[1])")
+    println("Last point: $(points_x[end]), $(points_y[end])")
 
-    # Show the closing segment explicitly
-    if length(x_coords) >= 2
-        second_last_idx = length(x_coords) - 1
-        println("Closing segment: ($(x_coords[second_last_idx]), $(y_coords[second_last_idx])) → ($(x_coords[end]), $(y_coords[end]))")
+    # Force closure by adding first point at end for interpolation
+    closed_x = vcat(points_x, points_x[1])
+    closed_y = vcat(points_y, points_y[1])
+    n_closed = length(closed_x)
 
-        # Verify the closing distance
-        closing_distance = sqrt((x_coords[end] - x_coords[second_last_idx])^2 + (y_coords[end] - y_coords[second_last_idx])^2)
-        println("Closing segment length: $(closing_distance)")
-    end
+    # Create points matrix for interpNurbs (2 x n format)
+    points_matrix = SMatrix{2, n_closed, Float32}(vcat(closed_x', closed_y'))
 
-    # Create exact polyline signed distance function
-    function exact_polyline_sdf(x, t)
-        px, py = x[1], x[2]
+    # Choose degree - start with linear (degree=1) for robustness
+    degree = min(1, n_closed - 1)  # Use degree 1 (linear) as you suggested
+    println("Using NURBS degree: $degree for $n_closed points (including closure)")
 
-        # Point-in-polygon test using ray casting (simpler and more reliable)
-        inside = false
-        crossings = 0
+    # Create interpolating NURBS curve using interpNurbs
+    try
+        nurbs_curve = ParametricBodies.interpNurbs(points_matrix; p=degree)
+        println("Successfully created interpNurbs curve")
 
-        for i in 1:length(x_coords)-1  # Go through all edges including the closing one
-            x1, y1 = x_coords[i], y_coords[i]
-            x2, y2 = x_coords[i + 1], y_coords[i + 1]
+        # Define curve function using interpNurbs evaluation
+        function curve(u, t)
+            # Ensure u is in [0, 1]
+            u_wrapped = mod(u, 1.0)
 
-            # Ray casting algorithm: cast ray from point to the right
-            # Check if edge crosses the ray
-            if ((y1 > py) != (y2 > py))  # Edge crosses horizontal line through point
-                # Calculate x-intersection of edge with ray
-                x_intersect = x1 + (py - y1) * (x2 - x1) / (y2 - y1)
-                if px < x_intersect  # Point is to the left of intersection
-                    inside = !inside
-                    crossings += 1
+            try
+                point = nurbs_curve(u_wrapped, t)
+                return SVector(Float32(point[1]), Float32(point[2]))
+            catch e
+                println("NURBS evaluation failed at u=$u_wrapped: $e")
+                # Fallback to linear interpolation
+                if u_wrapped == 0.0 || u_wrapped == 1.0
+                    return SVector(closed_x[1], closed_y[1])
+                else
+                    idx = min(Int(floor(u_wrapped * (n_closed-1))) + 1, n_closed-1)
+                    t_local = (u_wrapped * (n_closed-1)) - (idx-1)
+                    x = closed_x[idx] + t_local * (closed_x[idx+1] - closed_x[idx])
+                    y = closed_y[idx] + t_local * (closed_y[idx+1] - closed_y[idx])
+                    return SVector(x, y)
                 end
             end
         end
 
-        # Debug for specific test points (disabled)
-        # if abs(px - 123.4) < 1.0 && abs(py - 144.0) < 1.0  # Near center test point
-        #     println("Debug: Point ($(px), $(py)) had $(crossings) crossings, inside = $(inside)")
-        # end
+        # Define locate function using NURBS
+        function locate(x, t)
+            px, py = x[1], x[2]
+            min_dist = Float32(Inf)
+            best_param = Float32(0)
 
-        # Calculate minimum distance to any edge (including the closing edge)
-        min_dist_sq = Float32(1e6)  # Large initial value
-        for i in 1:length(x_coords)-1  # Go through all edges including the closing one
-            x1, y1 = x_coords[i], y_coords[i]
-            x2, y2 = x_coords[i + 1], y_coords[i + 1]
-
-            # Vector from point to line segment start
-            dx = px - x1
-            dy = py - y1
-
-            # Line segment vector
-            lx = x2 - x1
-            ly = y2 - y1
-
-            # Length squared of line segment
-            len_sq = lx * lx + ly * ly
-
-            if len_sq > Float32(1e-8)  # Avoid division by zero
-                # Parameter t for closest point on line segment (clamped to [0,1])
-                t_param = max(Float32(0), min(Float32(1), (dx * lx + dy * ly) / len_sq))
-
-                # Closest point on line segment
-                closest_x = x1 + t_param * lx
-                closest_y = y1 + t_param * ly
-
-                # Distance squared to closest point
-                dist_sq = (px - closest_x)^2 + (py - closest_y)^2
-            else
-                # Degenerate line segment (point)
-                dist_sq = dx^2 + dy^2
+            # Sample the NURBS curve to find closest point
+            n_samples = 200
+            for i in 0:n_samples
+                u = Float32(i) / n_samples
+                try
+                    curve_point = curve(u, t)
+                    dist = sqrt((px - curve_point[1])^2 + (py - curve_point[2])^2)
+                    if dist < min_dist
+                        min_dist = dist
+                        best_param = u
+                    end
+                catch
+                    continue
+                end
             end
 
-            min_dist_sq = min(min_dist_sq, dist_sq)
+            return best_param
         end
 
-        min_dist = sqrt(min_dist_sq)
+        # Create ParametricBody with NURBS curve
+        body = ParametricBody(curve, locate)
 
-        # Return signed distance: negative inside, positive outside
-        sdf_value = inside ? -min_dist : min_dist
+        # Test the body function
+        centroid_x = sum(points_x) / n_points
+        centroid_y = sum(points_y) / n_points
+        test_point = SVector(centroid_x, centroid_y)
 
-        # Debug: occasionally print SDF values to verify it's working (disabled)
-        # if rand() < 0.0001  # Print very rarely to avoid spam
-        #     println("SDF at ($(px), $(py)): inside=$inside, dist=$min_dist, sdf=$sdf_value")
-        # end
+        println("Testing interpNurbs ParametricBody at centroid ($centroid_x, $centroid_y): $(WaterLily.sdf(body, test_point, 0.0))")
 
-        return sdf_value
+        # Test closure by checking curve at parameters 0 and 1
+        p0 = curve(0.0, 0.0)
+        p1 = curve(1.0, 0.0)
+        closure_error = sqrt((p0[1] - p1[1])^2 + (p0[2] - p1[2])^2)
+        println("interpNurbs Curve at u=0.0: $p0")
+        println("interpNurbs Curve at u=1.0: $p1")
+        println("interpNurbs closure error: $closure_error")
+
+        return body, curve
+
+    catch e
+        println("Failed to create interpNurbs curve: $e")
+        println("Falling back to linear interpolation")
+
+        # Fallback to simple linear interpolation
+        function curve_fallback(u, t)
+            u_wrapped = mod(u, 1.0)
+            if u_wrapped == 1.0
+                return SVector(closed_x[1], closed_y[1])  # Perfect closure
+            end
+
+            idx = min(Int(floor(u_wrapped * (n_closed-1))) + 1, n_closed-1)
+            t_local = (u_wrapped * (n_closed-1)) - (idx-1)
+            x = closed_x[idx] + t_local * (closed_x[idx+1] - closed_x[idx])
+            y = closed_y[idx] + t_local * (closed_y[idx+1] - closed_y[idx])
+            return SVector(x, y)
+        end
+
+        function locate_fallback(x, t)
+            px, py = x[1], x[2]
+            min_dist = Float32(Inf)
+            best_param = Float32(0)
+
+            for i in 0:200
+                u = Float32(i) / 200
+                curve_point = curve_fallback(u, t)
+                dist = sqrt((px - curve_point[1])^2 + (py - curve_point[2])^2)
+                if dist < min_dist
+                    min_dist = dist
+                    best_param = u
+                end
+            end
+            return best_param
+        end
+
+        body = ParametricBody(curve_fallback, locate_fallback)
+
+        # Test closure
+        p0 = curve_fallback(0.0, 0.0)
+        p1 = curve_fallback(1.0, 0.0)
+        closure_error = sqrt((p0[1] - p1[1])^2 + (p0[2] - p1[2])^2)
+        println("Fallback curve closure error: $closure_error")
+
+        return body, curve_fallback
     end
+end
 
-    # Test the signed distance function at a few points
-    center_x_test = (minimum(x_coords) + maximum(x_coords)) / 2
-    center_y_test = (minimum(y_coords) + maximum(y_coords)) / 2
+# Function to plot parametric curve
+function plot_parametric_curve!(curve_func, t=0.0; n_points=200, color=:red, linewidth=2)
+    # Generate points along the parametric curve
+    u_values = range(0, 1, length=n_points)
+    curve_points = [curve_func(u, t) for u in u_values]
 
-    println("Testing SDF function:")
-    println("  Polyline X range: [$(minimum(x_coords)), $(maximum(x_coords))]")
-    println("  Polyline Y range: [$(minimum(y_coords)), $(maximum(y_coords))]")
-    println("  Center point ($(center_x_test), $(center_y_test)): $(exact_polyline_sdf([center_x_test, center_y_test], 0.0f0))")
-    println("  Outside point ($(minimum(x_coords)-10), $(center_y_test)): $(exact_polyline_sdf([minimum(x_coords)-10, center_y_test], 0.0f0))")
+    # Extract x and y coordinates
+    x_coords = [p[1] for p in curve_points]
+    y_coords = [p[2] for p in curve_points]
 
-    # Test a point we know should be inside
-    inside_test_x = (x_coords[1] + x_coords[10]) / 2  # Average of first and 10th point
-    inside_test_y = (y_coords[1] + y_coords[10]) / 2
-    println("  Likely inside point ($(inside_test_x), $(inside_test_y)): $(exact_polyline_sdf([inside_test_x, inside_test_y], 0.0f0))")
-
-    return AutoBody(exact_polyline_sdf)
+    # Plot the curve
+    plot!(x_coords, y_coords, color=color, linewidth=linewidth, label="Body outline")
 end
 
 # Main simulation function adapted for boundary and custom curves
@@ -184,7 +215,7 @@ function circle_flow_with_boundary(boundary_json_path, curve_json_path=nothing;
     # Create body directly in real coordinates (no transformation needed)
     if curve_data !== nothing && haskey(curve_data, "points")
         println("Using custom curve with $(length(curve_data["points"])) points")
-        body = create_polyline_body(curve_data["points"], boundary_data)
+        body, curve_func = create_polyline_body(curve_data["points"], boundary_data)
     else
         # Default to circle if no curve provided
         println("Using default circle within boundary")
@@ -194,6 +225,13 @@ function circle_flow_with_boundary(boundary_json_path, curve_json_path=nothing;
             dist = sqrt((x[1] - Float32(center_x))^2 + (x[2] - Float32(center_y))^2)
             return Float32(dist - radius)
         end)
+        # Default circle curve function for plotting
+        curve_func = (u, t) -> begin
+            angle = u * 2π
+            x = Float32(center_x) + radius * cos(angle)
+            y = Float32(center_y) + radius * sin(angle)
+            return SVector(x, y)
+        end
     end
 
     # Calculate kinematic viscosity
@@ -224,14 +262,14 @@ function circle_flow_with_boundary(boundary_json_path, curve_json_path=nothing;
     # Create simulation with domain dimensions matching boundary rectangle
     sim = Simulation((n, m), (U, 0), char_length; ν=ν, body=translated_body, mem=mem)
 
-    # Return simulation with domain info
-    return sim, (x_min, y_min, domain_width, domain_height, char_length)
+    # Return simulation with domain info and curve function for plotting
+    return sim, (x_min, y_min, domain_width, domain_height, char_length), curve_func
 end
 
 # Example usage with JSON files
 function run_simulation_from_json(boundary_json_path, curve_json_path=nothing; kwargs...)
     # Initialize the simulation
-    sim, domain_info = circle_flow_with_boundary(boundary_json_path, curve_json_path; kwargs...)
+    sim, domain_info, curve_func = circle_flow_with_boundary(boundary_json_path, curve_json_path; kwargs...)
     x_min, y_min, domain_width, domain_height, char_length = domain_info
 
     # Log the residual
@@ -248,37 +286,28 @@ function run_simulation_from_json(boundary_json_path, curve_json_path=nothing; k
     gif_filename = "$(cID)_simulation.gif"
     println("Creating animation as: $gif_filename")
 
-    # Try to create the animation
+    # Improved animation creation method
     try
-        # Method 1: Use sim_gif! with name parameter
-        sim_gif!(sim, duration=duration, clims=(-5,5), plotbody=true, name=gif_filename)
-        println("Animation saved successfully using sim_gif!")
-    catch e1
-        println("Method 1 failed: $e1")
-        try
-            # Method 2: Use sim_gif! without name and save manually
-            println("Trying alternative method...")
-            anim = sim_gif!(sim, duration=duration, clims=(-5,5), plotbody=true)
-            gif(anim, gif_filename, fps=15)
-            println("Animation saved successfully using manual save")
-        catch e2
-            println("Method 2 failed: $e2")
-            try
-                # Method 3: Create animation manually
-                println("Trying manual animation creation...")
-                anim = Animation()
-                for i in 1:Int(duration*10)  # 10 frames per second
-                    mom_step!(sim.flow, sim.pois)
-                    flood(sim, clims=(-5,5), plotbody=true)
-                    frame(anim)
-                end
-                gif(anim, gif_filename, fps=10)
-                println("Animation created manually and saved")
-            catch e3
-                println("All methods failed: $e3")
-                println("Skipping animation creation")
+        # Create animation using WaterLily's sim_gif! function
+        println("Creating animation with sim_gif!...")
+        gif_result = sim_gif!(sim, duration=duration, clims=(-5,5), plotbody=true)
+
+        # Check if sim_gif! returned an animation object
+        if isa(gif_result, Plots.Animation)
+            # Save the animation manually
+            gif(gif_result, gif_filename, fps=15)
+            println("Animation created and saved successfully!")
+        else
+            # sim_gif! may have saved directly, check if file exists
+            if isfile(gif_filename)
+                println("Animation saved directly by sim_gif!")
+            else
+                println("Animation creation failed - no output file found")
             end
         end
+    catch e
+        println("Animation creation failed with error: $e")
+        println("Continuing without animation...")
     end
 
     # Create a static plot of the final state
@@ -315,11 +344,12 @@ function run_simulation_from_json(boundary_json_path, curve_json_path=nothing; k
            xlims=(x_min, x_min + domain_width),
            ylims=(y_min, y_min + domain_height))
 
-    # Add body outline if available
+    # Add body outline using parametric curve
     try
-        body_plot!(sim)
-    catch
-        println("Could not add body outline to plot")
+        plot_parametric_curve!(curve_func, 0.0; color=:black, linewidth=3)
+        println("Added parametric body outline to plot")
+    catch e
+        println("Could not add body outline to plot: $e")
     end
 
     title!("Final Flow State - $(cID)")
@@ -338,18 +368,22 @@ function run_simulation_from_json(boundary_json_path, curve_json_path=nothing; k
     log_file = "$(cID).log"
     if isfile(log_file)
         println("Plotting residual convergence...")
-        plot_logger(log_file)
-        residual_filename = "$(cID)_residuals.png"
-        savefig(residual_filename)
-        println("Saved residual plot as: $residual_filename")
-        display(current())
+        try
+            plot_logger(log_file)
+            residual_filename = "$(cID)_residuals.png"
+            savefig(residual_filename)
+            println("Saved residual plot as: $residual_filename")
+            display(current())
+        catch e
+            println("Could not plot residuals: $e")
+        end
     end
 
     println("Simulation complete! Check the generated files:")
     println("  - Animation: $gif_filename")
     println("  - Final state: $png_filename")
     if isfile(log_file)
-        println("  - Residuals: $residual_filename")
+        println("  - Residuals: $(cID)_residuals.png")
     end
 
     return sim
