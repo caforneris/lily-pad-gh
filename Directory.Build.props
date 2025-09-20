@@ -1,0 +1,31 @@
+<Project>
+  <!-- Global properties for all projects in the solution -->
+  <PropertyGroup>
+    <!-- Common build settings -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningsAsErrors />
+    <WarningsNotAsErrors />
+
+    <!-- Code analysis settings -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+
+    <!-- NuGet settings -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+
+    <!-- IDE integration -->
+    <GenerateDocumentationFile Condition="'$(Configuration)' == 'VS Debug' Or '$(Configuration)' == 'VS Release'">true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- Visual Studio Professional specific settings -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'LilyPadGH'">
+    <!-- IntelliSense and debugging support -->
+    <DebugSymbols Condition="'$(Configuration)' == 'VS Debug'">true</DebugSymbols>
+    <DebugType Condition="'$(Configuration)' == 'VS Debug'">full</DebugType>
+
+    <!-- Performance optimizations for release -->
+    <Optimize Condition="'$(Configuration)' == 'VS Release'">true</Optimize>
+    <TieredCompilation Condition="'$(Configuration)' == 'VS Release'">true</TieredCompilation>
+  </PropertyGroup>
+</Project>
