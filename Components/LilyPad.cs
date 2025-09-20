@@ -99,7 +99,7 @@ namespace LilyPadGH.Components
             _settings = newSettings; // Update settings from the dialog
             _cancellationTokenSource = new CancellationTokenSource();
 
-            // NOTE: Fire-and-forget async task. The UI remains responsive while the simulation runs.
+            // NOTE: Fire-and-forget async task. UI to remains responsive while the simulation runs.
             Task.Run(() => RunSimulationAsync(_cancellationTokenSource.Token));
         }
 

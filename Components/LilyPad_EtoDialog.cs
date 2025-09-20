@@ -87,7 +87,7 @@ namespace LilyPadGH.Components
 
         private void OnRunStopButtonClick(object sender, EventArgs e)
         {
-            // The button's text is used to determine which event to fire.
+            // The button's text to determine which event to fire.
             if (_runStopButton.Text == "Apply & Run")
             {
                 // Update the settings object from the UI before firing the event

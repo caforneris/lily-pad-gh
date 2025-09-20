@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0-windows7.0": {
+      "Grasshopper": {
+        "type": "Direct",
+        "requested": "[8.1.23325.13001, )",
+        "resolved": "8.1.23325.13001",
+        "contentHash": "uc6orkeei4BycrgmVOskOqvn//hmr0TNNGdaPaHI0engd+tYaTQW48pm/efNgrvm9MO4wS3GjA86VUvkIGmNhg==",
+        "dependencies": {
+          "RhinoCommon": "[8.1.23325.13001]"
+        }
+      },
+      "RhinoCommon": {
+        "type": "Direct",
+        "requested": "[8.1.23325.13001, )",
+        "resolved": "8.1.23325.13001",
+        "contentHash": "091akJzeX1miwgea6peGZUlz2HyRBpfh52gl3aYW8LGceq4kXyeCATNw15e8hQsQ79gyyggzF2pPcctnti11fg=="
+      },
+      "System.Drawing.Common": {
+        "type": "Direct",
+        "requested": "[8.0.0, )",
+        "resolved": "8.0.0",
+        "contentHash": "JkbHJjtI/dWc5dfmEdJlbe3VwgZqCkZRtfuWFh5GOv0f+gGCfBtzMpIVkmdkj2AObO9y+oiOi81UGwH3aBYuqA==",
+        "dependencies": {
+          "Microsoft.Win32.SystemEvents": "8.0.0"
+        }
+      },
+      "System.Text.Json": {
+        "type": "Direct",
+        "requested": "[8.0.5, )",
+        "resolved": "8.0.5",
+        "contentHash": "0f1B50Ss7rqxXiaBJyzUu9bWFOO2/zSlifZ/UNMdiIpDYe4cY4LQQicP4nirK1OS31I43rn062UIJ1Q9bpmHpg=="
+      },
+      "Microsoft.Win32.SystemEvents": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "9opKRyOKMCi2xJ7Bj7kxtZ1r9vbzosMvRrdEhVhDz8j8MoBGgB+WmC94yH839NPH+BclAjtQ/pyagvi/8gDLkw=="
+      }
+    }
+  }
+}
