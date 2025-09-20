@@ -1,0 +1,18 @@
+{
+  "version": "0.2.1",
+  "defaults": {},
+  "configurations": [
+    {
+      "type": "default",
+      "project": "lily-pad-gh.sln",
+      "projectTarget": "LilyPadGH.csproj",
+      "name": "Debug with Rhino 8"
+    },
+    {
+      "type": "default",
+      "project": "lily-pad-gh.sln",
+      "projectTarget": "LilyPadGH.csproj",
+      "name": "Release with Rhino 8"
+    }
+  ]
+}
