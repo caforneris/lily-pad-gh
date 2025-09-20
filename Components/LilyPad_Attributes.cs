@@ -1,8 +1,10 @@
 ﻿// ========================================
-// PART 2: CUSTOM COMPONENT ATTRIBUTES
+// FILE: LilyPad_Attributes.cs
+// PART 4: CUSTOM COMPONENT ATTRIBUTES
+// DESC: Handles custom rendering and UI interaction for the component on the canvas.
+//       This keeps all canvas-specific drawing logic separate from the
+//       component's core logic.
 // ========================================
-// Handles custom rendering and UI interaction for the component on the canvas.
-// This keeps all canvas-specific drawing logic separate from the component's core logic.
 
 using Grasshopper.GUI;
 using Grasshopper.GUI.Canvas;
@@ -10,8 +12,9 @@ using Grasshopper.Kernel;
 using Grasshopper.Kernel.Attributes;
 using System.Drawing;
 using System.Windows.Forms;
-using GH_Graphics = System.Drawing.Graphics;
+
 // Resolve namespace conflicts
+using GH_Graphics = System.Drawing.Graphics;
 using GH_Rectangle = System.Drawing.Rectangle;
 
 namespace LilyPadGH.Components
@@ -53,7 +56,7 @@ namespace LilyPadGH.Components
 
                 // Visual feedback based on running state
                 GH_Palette palette = comp._isRunning ? GH_Palette.Blue : GH_Palette.Black;
-                string text = comp._isRunning ? "Running..." : "Configure CFD";
+                string text = "Configure & Run";
 
                 var button = GH_Capsule.CreateTextCapsule(ButtonBounds, ButtonBounds, palette, text);
                 button.Render(graphics, Selected, Owner.Locked, false);
@@ -61,7 +64,7 @@ namespace LilyPadGH.Components
             }
         }
 
-        // Handle button clicks - prevent interaction when solver is running
+        // Handle button clicks to show the dialog
         public override GH_ObjectResponse RespondToMouseDown(GH_Canvas sender, GH_CanvasMouseEvent e)
         {
             if (e.Button == MouseButtons.Left && ButtonBounds.Contains(Point.Round(e.CanvasLocation)))
@@ -76,4 +79,3 @@ namespace LilyPadGH.Components
         }
     }
 }
-
