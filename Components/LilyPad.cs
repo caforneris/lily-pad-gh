@@ -4,14 +4,20 @@
 // DESC: Core Grasshopper component. Manages inputs/outputs, orchestrates the UI,
 //       and integrates logic for both immediate data processing and a simulated
 //       background analysis task.
+// --- REVISIONS ---
+// - 2025-09-20 @ 18:24: Added Julia integration.
+//   - Added a new output parameter for Julia results.
+//   - Updated SolveInstance to call the new JuliaRunner class.
+//   - Added a "JuliaScripts" folder to the project structure.
 // ========================================
 
 using Grasshopper.Kernel;
 using Rhino;
 using Rhino.Geometry;
-using Rhino.UI; // NOTE: Added for Eto window owner assignment
+using Rhino.UI;
 using System;
 using System.Collections.Generic;
+using System.IO; // NOTE: Added for Path.Combine
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
@@ -58,6 +64,9 @@ namespace LilyPadGH.Components
             pManager.AddTextParameter("Boundary JSON", "BJ", "Boundary plane in JSON format", GH_ParamAccess.item);
             pManager.AddTextParameter("Curve JSON", "CJ", "Custom curve points in JSON format", GH_ParamAccess.item);
             pManager.AddPointParameter("Curve Points", "Pts", "Discretized curve points", GH_ParamAccess.list);
+
+            // NOTE: New output for Julia script results.
+            pManager.AddTextParameter("Julia Output", "JO", "Output from the executed Julia script", GH_ParamAccess.item);
         }
 
         public override void CreateAttributes()
@@ -81,8 +90,6 @@ namespace LilyPadGH.Components
             }
 
             // --- Data Processing (from reference component) ---
-
-            // Generate a summary string of all parameters
             string parameters = $"Reynolds Number: {_settings.ReynoldsNumber}\n" +
                               $"Velocity: {_settings.Velocity}\n" +
                               $"Grid Resolution: {_settings.GridResolutionX}x{_settings.GridResolutionY}\n" +
@@ -90,7 +97,6 @@ namespace LilyPadGH.Components
                               $"Boundary Height: {boundary.Height:F3}\n" +
                               $"Duration: {_settings.Duration} seconds";
 
-            // Create an anonymous object for boundary JSON serialization
             var boundaryJson = new
             {
                 type = "rectangle",
@@ -107,8 +113,7 @@ namespace LilyPadGH.Components
             };
             string boundaryJsonString = JsonSerializer.Serialize(boundaryJson, new JsonSerializerOptions { WriteIndented = true });
 
-            // Process the optional curve input
-            string curveJsonString = "{}"; // Default to empty JSON object
+            string curveJsonString = "{}";
             var curvePoints = new List<Point3d>();
             if (customCurve != null && customCurve.IsValid)
             {
@@ -126,6 +131,32 @@ namespace LilyPadGH.Components
                 }
             }
 
+            // --- JULIA INTEGRATION ---
+            string juliaOutput = "Julia script not executed.";
+            try
+            {
+                // NOTE: Define the path to your Julia script relative to the .gha location.
+                string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                string scriptPath = Path.Combine(ghaDirectory, "JuliaScripts", "simple_script.jl");
+
+                if (File.Exists(scriptPath))
+                {
+                    // Pass a simple argument for demonstration.
+                    string args = $"Re={_settings.ReynoldsNumber}";
+                    juliaOutput = JuliaRunner.RunScript(scriptPath, args);
+                }
+                else
+                {
+                    juliaOutput = "Error: simple_script.jl not found. Ensure it's in a 'JuliaScripts' folder and set to 'Copy if newer'.";
+                }
+            }
+            catch (Exception ex)
+            {
+                // Display Julia errors on the component itself.
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Julia Error: {ex.Message}");
+                juliaOutput = "Execution failed. See component error message.";
+            }
+
             // --- Output Assignment ---
             DA.SetData(0, _status);
             DA.SetData(1, parameters);
@@ -133,6 +164,7 @@ namespace LilyPadGH.Components
             DA.SetData(3, boundaryJsonString);
             DA.SetData(4, curveJsonString);
             DA.SetDataList(5, curvePoints);
+            DA.SetData(6, juliaOutput); // Set the new Julia output
 
             // Update component message on canvas
             Message = _isRunning ? "Running..." : "Configured";
@@ -164,7 +196,6 @@ namespace LilyPadGH.Components
             };
 
             // NOTE: For Eto, set the Owner property first, then call Show() with no arguments.
-            // This correctly parents the dialog to the main Rhino/GH window.
             _activeDialog.Owner = RhinoEtoApp.MainWindow;
             _activeDialog.Show();
         }
@@ -195,7 +226,6 @@ namespace LilyPadGH.Components
                 _isRunning = true;
                 UpdateComponentState("Simulation starting...", true);
 
-                // Simulate work based on duration and a fixed delay per step
                 int steps = (int)(_settings.Duration / 0.1); // Assuming 10 steps per second of duration
                 for (int i = 0; i <= steps; i++)
                 {
