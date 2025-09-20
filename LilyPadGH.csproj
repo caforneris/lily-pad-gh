@@ -1,0 +1,57 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Version>0.0.1</Version>
+    <LangVersion>12.0</LangVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Title>LilyPadGH</Title>
+    <Description>LilyPadGH - Fluid dynamics simulation for Grasshopper</Description>
+    <TargetExt>.gha</TargetExt>
+    <OutputType>Library</OutputType>
+    <AutoGenerateBindingRedirects>False</AutoGenerateBindingRedirects>
+    <StartupObject />
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
+    <Configurations>Debug;Release;Deploy Rhino 8;Deploy Rhino 7</Configurations>
+  </PropertyGroup>
+  
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DebugType>none</DebugType>
+    <Optimize>False</Optimize>
+  </PropertyGroup>
+  
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Deploy Rhino 8|AnyCPU'">
+    <DebugType>none</DebugType>
+    <Optimize>False</Optimize>
+  </PropertyGroup>
+  
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Deploy Rhino 7|AnyCPU'">
+    <DebugType>none</DebugType>
+    <Optimize>False</Optimize>
+  </PropertyGroup>
+  
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+  
+  <PropertyGroup>
+    <!-- Default to copying for both Rhino 7 and Rhino 8 if not set -->
+    <RhinoVersion Condition="'$(RhinoVersion)'==''">Both</RhinoVersion>
+    <!-- Define deployment paths as properties -->
+    <Rhino8Path>%appdata%\McNeel\Rhinoceros\packages\8.0\LilyPadGH\0.0.1</Rhino8Path>
+    <Rhino7Path>%appdata%\McNeel\Rhinoceros\packages\7.0\LilyPadGH\0.0.1</Rhino7Path>
+  </PropertyGroup>
+  
+  <!-- Package references -->
+  <ItemGroup>
+    <PackageReference Include="Grasshopper" Version="8.1.23325.13001" />
+    <PackageReference Include="RhinoCommon" Version="8.1.23325.13001" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+  </ItemGroup>
+
+  <!-- Post-build deployment - Compatible with VS Code and Visual Studio Professional -->
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <!-- Single deployment script that handles all configurations -->
+    <Exec Command="call &quot;$(ProjectDir)Deployment\deploy.bat&quot; &quot;$(TargetDir)&quot; &quot;$(ProjectDir)&quot; &quot;$(Configuration)&quot; &quot;$(RhinoVersion)&quot;" />
+  </Target>
+</Project>
