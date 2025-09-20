@@ -41,6 +41,14 @@
     <Rhino7Path>%appdata%\McNeel\Rhinoceros\packages\7.0\LilyPadGH\0.0.1</Rhino7Path>
   </PropertyGroup>
   
+  <ItemGroup>
+    <None Remove="Icons\CFDAnalysisIcon.png" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <EmbeddedResource Include="Icons\CFDAnalysisIcon.png" />
+  </ItemGroup>
+  
   <!-- Package references -->
   <ItemGroup>
     <PackageReference Include="Grasshopper" Version="8.1.23325.13001" />
