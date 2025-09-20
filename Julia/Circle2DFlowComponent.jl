@@ -1,4 +1,4 @@
-using WaterLily, Plots, JSON
+using WaterLily, Plots, JSON, StaticArrays
 
 # Set the plots backend for better compatibility
 gr() # Use GR backend for plotting
@@ -26,54 +26,73 @@ function create_polyline_body(curve_points, boundary_data)
     x_coords = Float32[p["x"] for p in curve_points]
     y_coords = Float32[p["y"] for p in curve_points]
 
-    # Ensure the polyline is closed by connecting the last point to the first
-    if (x_coords[1], y_coords[1]) != (x_coords[end], y_coords[end])
-        push!(x_coords, x_coords[1])
-        push!(y_coords, y_coords[1])
+    # Always ensure the polyline is properly closed by adding the first point at the end
+    # This guarantees a closed polygon for the signed distance function
+    if length(x_coords) > 0
+        # Check if already closed (within a small tolerance)
+        dx = abs(x_coords[1] - x_coords[end])
+        dy = abs(y_coords[1] - y_coords[end])
+        tolerance = 1e-6
+
+        if dx > tolerance || dy > tolerance
+            push!(x_coords, x_coords[1])
+            push!(y_coords, y_coords[1])
+            println("Closed polyline: added closing segment from ($(x_coords[end-1]), $(y_coords[end-1])) to ($(x_coords[end]), $(y_coords[end]))")
+        else
+            println("Polyline was already closed within tolerance")
+        end
     end
 
     println("Created exact closed polyline with $(length(x_coords)) points")
     println("Polyline bounds: X[$(minimum(x_coords)), $(maximum(x_coords))], Y[$(minimum(y_coords)), $(maximum(y_coords))]")
+    println("First point: ($(x_coords[1]), $(y_coords[1]))")
+    println("Last point: ($(x_coords[end]), $(y_coords[end]))")
+    println("Closed: $(x_coords[1] == x_coords[end] && y_coords[1] == y_coords[end])")
+
+    # Show the closing segment explicitly
+    if length(x_coords) >= 2
+        second_last_idx = length(x_coords) - 1
+        println("Closing segment: ($(x_coords[second_last_idx]), $(y_coords[second_last_idx])) → ($(x_coords[end]), $(y_coords[end]))")
+
+        # Verify the closing distance
+        closing_distance = sqrt((x_coords[end] - x_coords[second_last_idx])^2 + (y_coords[end] - y_coords[second_last_idx])^2)
+        println("Closing segment length: $(closing_distance)")
+    end
 
     # Create exact polyline signed distance function
     function exact_polyline_sdf(x, t)
         px, py = x[1], x[2]
 
-        # Point-in-polygon test using winding number (more robust than ray casting)
-        winding_number = 0
-        n = length(x_coords) - 1  # Exclude duplicate closing point
+        # Point-in-polygon test using ray casting (simpler and more reliable)
+        inside = false
+        crossings = 0
 
-        for i in 1:n
+        for i in 1:length(x_coords)-1  # Go through all edges including the closing one
             x1, y1 = x_coords[i], y_coords[i]
-            x2, y2 = x_coords[i % n + 1], y_coords[i % n + 1]
+            x2, y2 = x_coords[i + 1], y_coords[i + 1]
 
-            # Check if edge crosses horizontal ray from point to the right
-            if y1 <= py
-                if y2 > py  # Upward crossing
-                    # Compute cross product to determine left/right of edge
-                    cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-                    if cross > 0  # Point is left of edge
-                        winding_number += 1
-                    end
-                end
-            else
-                if y2 <= py  # Downward crossing
-                    # Compute cross product to determine left/right of edge
-                    cross = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
-                    if cross < 0  # Point is right of edge
-                        winding_number -= 1
-                    end
+            # Ray casting algorithm: cast ray from point to the right
+            # Check if edge crosses the ray
+            if ((y1 > py) != (y2 > py))  # Edge crosses horizontal line through point
+                # Calculate x-intersection of edge with ray
+                x_intersect = x1 + (py - y1) * (x2 - x1) / (y2 - y1)
+                if px < x_intersect  # Point is to the left of intersection
+                    inside = !inside
+                    crossings += 1
                 end
             end
         end
 
-        inside = winding_number != 0
+        # Debug for specific test points (disabled)
+        # if abs(px - 123.4) < 1.0 && abs(py - 144.0) < 1.0  # Near center test point
+        #     println("Debug: Point ($(px), $(py)) had $(crossings) crossings, inside = $(inside)")
+        # end
 
-        # Calculate minimum distance to any edge
+        # Calculate minimum distance to any edge (including the closing edge)
         min_dist_sq = Float32(1e6)  # Large initial value
-        for i in 1:n
+        for i in 1:length(x_coords)-1  # Go through all edges including the closing one
             x1, y1 = x_coords[i], y_coords[i]
-            x2, y2 = x_coords[i % n + 1], y_coords[i % n + 1]
+            x2, y2 = x_coords[i + 1], y_coords[i + 1]
 
             # Vector from point to line segment start
             dx = px - x1
@@ -107,8 +126,30 @@ function create_polyline_body(curve_points, boundary_data)
         min_dist = sqrt(min_dist_sq)
 
         # Return signed distance: negative inside, positive outside
-        return inside ? -min_dist : min_dist
+        sdf_value = inside ? -min_dist : min_dist
+
+        # Debug: occasionally print SDF values to verify it's working (disabled)
+        # if rand() < 0.0001  # Print very rarely to avoid spam
+        #     println("SDF at ($(px), $(py)): inside=$inside, dist=$min_dist, sdf=$sdf_value")
+        # end
+
+        return sdf_value
     end
+
+    # Test the signed distance function at a few points
+    center_x_test = (minimum(x_coords) + maximum(x_coords)) / 2
+    center_y_test = (minimum(y_coords) + maximum(y_coords)) / 2
+
+    println("Testing SDF function:")
+    println("  Polyline X range: [$(minimum(x_coords)), $(maximum(x_coords))]")
+    println("  Polyline Y range: [$(minimum(y_coords)), $(maximum(y_coords))]")
+    println("  Center point ($(center_x_test), $(center_y_test)): $(exact_polyline_sdf([center_x_test, center_y_test], 0.0f0))")
+    println("  Outside point ($(minimum(x_coords)-10), $(center_y_test)): $(exact_polyline_sdf([minimum(x_coords)-10, center_y_test], 0.0f0))")
+
+    # Test a point we know should be inside
+    inside_test_x = (x_coords[1] + x_coords[10]) / 2  # Average of first and 10th point
+    inside_test_y = (y_coords[1] + y_coords[10]) / 2
+    println("  Likely inside point ($(inside_test_x), $(inside_test_y)): $(exact_polyline_sdf([inside_test_x, inside_test_y], 0.0f0))")
 
     return AutoBody(exact_polyline_sdf)
 end
@@ -140,43 +181,17 @@ function circle_flow_with_boundary(boundary_json_path, curve_json_path=nothing;
     # Use the larger dimension as the characteristic length
     char_length = Float32(max(width, height))
 
-    # Create a coordinate transformation function
-    # Maps simulation grid coordinates (0 to n, 0 to m) to real coordinates (x_min to x_max, y_min to y_max)
-    function grid_to_real(grid_x, grid_y)
-        real_x = x_min + (grid_x / n) * width
-        real_y = y_min + (grid_y / m) * height
-        return real_x, real_y
-    end
-
-    # Create transformed body that works in grid coordinates
+    # Create body directly in real coordinates (no transformation needed)
     if curve_data !== nothing && haskey(curve_data, "points")
         println("Using custom curve with $(length(curve_data["points"])) points")
-        # Create the polyline body in real coordinates
-        real_body = create_polyline_body(curve_data["points"], boundary_data)
-
-        # Wrap it to work with grid coordinates
-        body = AutoBody((x, t) -> begin
-            # Transform grid coordinates to real coordinates
-            grid_x, grid_y = x[1], x[2]
-            real_x = x_min + (grid_x / char_length) * Float32(width)
-            real_y = y_min + (grid_y / char_length) * Float32(height)
-
-            # Evaluate the real body function using sdf
-            return WaterLily.sdf(real_body, [real_x, real_y], t)
-        end)
+        body = create_polyline_body(curve_data["points"], boundary_data)
     else
         # Default to circle if no curve provided
         println("Using default circle within boundary")
         radius = Float32(min(width, height) / 8)
-
         body = AutoBody((x, t) -> begin
-            # Transform grid coordinates to real coordinates
-            grid_x, grid_y = x[1], x[2]
-            real_x = x_min + (grid_x / char_length) * Float32(width)
-            real_y = y_min + (grid_y / char_length) * Float32(height)
-
             # Distance from real center
-            dist = sqrt((real_x - Float32(center_x))^2 + (real_y - Float32(center_y))^2)
+            dist = sqrt((x[1] - Float32(center_x))^2 + (x[2] - Float32(center_y))^2)
             return Float32(dist - radius)
         end)
     end
@@ -191,16 +206,33 @@ function circle_flow_with_boundary(boundary_json_path, curve_json_path=nothing;
     println("Kinematic viscosity: $ν")
     println("Simulation duration: $duration")
 
-    # Create simulation with proper coordinate mapping
-    sim = Simulation((n, m), (U, 0), char_length; ν=ν, body=body, mem=mem)
+    # Create simulation domain that exactly matches the boundary rectangle
+    # WaterLily expects domain to start from origin, so we translate everything
+    domain_width = Float32(width)
+    domain_height = Float32(height)
 
-    return sim
+    # Translate the polyline body to start from origin
+    translated_body = AutoBody((x, t) -> begin
+        # WaterLily coordinates are scaled, so convert back to real coordinates
+        real_x = x[1] * (domain_width / char_length) + x_min
+        real_y = x[2] * (domain_height / char_length) + y_min
+
+        # Evaluate body function at real coordinates
+        return WaterLily.sdf(body, [real_x, real_y], t)
+    end)
+
+    # Create simulation with domain dimensions matching boundary rectangle
+    sim = Simulation((n, m), (U, 0), char_length; ν=ν, body=translated_body, mem=mem)
+
+    # Return simulation with domain info
+    return sim, (x_min, y_min, domain_width, domain_height, char_length)
 end
 
 # Example usage with JSON files
 function run_simulation_from_json(boundary_json_path, curve_json_path=nothing; kwargs...)
     # Initialize the simulation
-    sim = circle_flow_with_boundary(boundary_json_path, curve_json_path; kwargs...)
+    sim, domain_info = circle_flow_with_boundary(boundary_json_path, curve_json_path; kwargs...)
+    x_min, y_min, domain_width, domain_height, char_length = domain_info
 
     # Log the residual
     WaterLily.logger(cID)
@@ -212,17 +244,76 @@ function run_simulation_from_json(boundary_json_path, curve_json_path=nothing; k
     duration = get(kwargs, :duration, 1)
     println("Starting simulation visualization...")
 
-    # Create the animated GIF (sim_gif! automatically saves it)
+    # Create the animated GIF
     gif_filename = "$(cID)_simulation.gif"
     println("Creating animation as: $gif_filename")
-    sim_gif!(sim, duration=duration, clims=(-5,5), plotbody=true, name=gif_filename)
+
+    # Try to create the animation
+    try
+        # Method 1: Use sim_gif! with name parameter
+        sim_gif!(sim, duration=duration, clims=(-5,5), plotbody=true, name=gif_filename)
+        println("Animation saved successfully using sim_gif!")
+    catch e1
+        println("Method 1 failed: $e1")
+        try
+            # Method 2: Use sim_gif! without name and save manually
+            println("Trying alternative method...")
+            anim = sim_gif!(sim, duration=duration, clims=(-5,5), plotbody=true)
+            gif(anim, gif_filename, fps=15)
+            println("Animation saved successfully using manual save")
+        catch e2
+            println("Method 2 failed: $e2")
+            try
+                # Method 3: Create animation manually
+                println("Trying manual animation creation...")
+                anim = Animation()
+                for i in 1:Int(duration*10)  # 10 frames per second
+                    mom_step!(sim.flow, sim.pois)
+                    flood(sim, clims=(-5,5), plotbody=true)
+                    frame(anim)
+                end
+                gif(anim, gif_filename, fps=10)
+                println("Animation created manually and saved")
+            catch e3
+                println("All methods failed: $e3")
+                println("Skipping animation creation")
+            end
+        end
+    end
 
     # Create a static plot of the final state
     println("Creating final state plot...")
 
-    # Extract vorticity field for visualization
-    vorticity = @. sim.flow.u[:,:,1] - sim.flow.u[:,:,2]
-    flood(vorticity, clims=(-5,5))
+    # Calculate vorticity field properly
+    u = sim.flow.u[:,:,1]  # x-velocity
+    v = sim.flow.u[:,:,2]  # y-velocity
+
+    # Calculate vorticity = ∂v/∂x - ∂u/∂y
+    nx, ny = size(u)
+    vorticity = zeros(Float32, nx, ny)
+
+    # Finite difference calculation of vorticity
+    dx = domain_width / nx
+    dy = domain_height / ny
+
+    for i in 2:nx-1
+        for j in 2:ny-1
+            dvdx = (v[i+1,j] - v[i-1,j]) / (2*dx)
+            dudy = (u[i,j+1] - u[i,j-1]) / (2*dy)
+            vorticity[i,j] = dvdx - dudy
+        end
+    end
+
+    # Create coordinate arrays for the real domain (boundary rectangle coordinates)
+    x_coords = range(x_min, x_min + domain_width, length=nx)
+    y_coords = range(y_min, y_min + domain_height, length=ny)
+
+    # Plot with real boundary coordinates
+    heatmap(x_coords, y_coords, vorticity',
+           clims=(-5,5),
+           aspect_ratio=:equal,
+           xlims=(x_min, x_min + domain_width),
+           ylims=(y_min, y_min + domain_height))
 
     # Add body outline if available
     try
@@ -232,6 +323,8 @@ function run_simulation_from_json(boundary_json_path, curve_json_path=nothing; k
     end
 
     title!("Final Flow State - $(cID)")
+    xlabel!("X Coordinate")
+    ylabel!("Y Coordinate")
 
     # Save the final state plot
     png_filename = "$(cID)_final_state.png"

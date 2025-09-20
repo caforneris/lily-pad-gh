@@ -25,4 +25,4 @@ sim_gif!(sim,duration=10,clims=(-5,5),plotbody=true)
 # Remember to call Plots package (already done in Line 2). This will let WaterLily
 # knows you want to plot sth like residual and will compile the funciton for you.
 # NOTE: Comment out this line if you want to see gif animation!
-plot_logger("$(cID).log")
+#plot_logger("$(cID).log")
