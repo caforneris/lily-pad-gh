@@ -8,12 +8,24 @@ Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
 		Release|Any CPU = Release|Any CPU
+		Deploy Rhino 7|Any CPU = Deploy Rhino 7|Any CPU
+		Deploy Rhino 8|Any CPU = Deploy Rhino 8|Any CPU
+		VS Debug|Any CPU = VS Debug|Any CPU
+		VS Release|Any CPU = VS Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Deploy Rhino 7|Any CPU.ActiveCfg = Deploy Rhino 7|Any CPU
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Deploy Rhino 7|Any CPU.Build.0 = Deploy Rhino 7|Any CPU
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Deploy Rhino 8|Any CPU.ActiveCfg = Deploy Rhino 8|Any CPU
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.Deploy Rhino 8|Any CPU.Build.0 = Deploy Rhino 8|Any CPU
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.VS Debug|Any CPU.ActiveCfg = VS Debug|Any CPU
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.VS Debug|Any CPU.Build.0 = VS Debug|Any CPU
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.VS Release|Any CPU.ActiveCfg = VS Release|Any CPU
+		{38ADAC40-CC2C-837F-7556-EF6F41C880D1}.VS Release|Any CPU.Build.0 = VS Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
