@@ -33,8 +33,8 @@ It integrates with the [WaterLily](https://github.com/WaterLily-jl/WaterLily.jl)
 - 🟦 **Custom Canvas UI**  
   A `Configure & Run` button is embedded directly on the Grasshopper canvas, opening the settings dialog.
 
-- 🐍 **Julia Integration**  
-  LilyPad bundles a standalone Julia runtime and executes scripts (e.g. `simple_script.jl`) using the `JuliaRunner` helper class.
+- 🐍 **Julia Integration**
+  LilyPad integrates with Julia via HTTP server communication. Use the ETO dialog buttons to start/stop the Julia server and push simulation data directly for real-time CFD analysis.
 
 ---
 

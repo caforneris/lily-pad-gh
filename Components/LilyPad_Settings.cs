@@ -23,6 +23,16 @@ namespace LilyPadGH.Components
         // Geometry properties
         public int CurveDivisions { get; set; } = 50;
 
+        // Julia simulation parameters
+        public int SimulationL { get; set; } = 32; // 2^5 = 32, simulation scale
+        public double SimulationU { get; set; } = 1.0; // Flow velocity scale
+        public double AnimationDuration { get; set; } = 1.0; // Animation duration in seconds
+        public bool PlotBody { get; set; } = true; // Show body in animation
+
+        // Julia point reduction parameters (disabled by default)
+        public double SimplifyTolerance { get; set; } = 0.0; // Douglas-Peucker tolerance (0 = no simplification)
+        public int MaxPointsPerPoly { get; set; } = 1000; // Maximum points per polyline (very high = no reduction)
+
 
         // NOTE: Simple memberwise clone is sufficient for a deep copy here as the class only
         // contains value types. This prevents the dialog from modifying the component's state
