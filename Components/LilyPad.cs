@@ -52,8 +52,8 @@ namespace LilyPadGH.Components
         {
             // NOTE: Core geometric inputs. All simulation parameters are handled via the Eto dialog.
             pManager.AddRectangleParameter("Boundary Plane", "B", "Boundary plane as rectangle (x,y dimensions)", GH_ParamAccess.item);
-            pManager.AddCurveParameter("Custom Curve", "Crv", "Optional custom curve to be discretized", GH_ParamAccess.item);
-            pManager[1].Optional = true; // Mark Custom Curve as optional
+            pManager.AddCurveParameter("Custom Curves", "Crvs", "Optional custom curves to be discretized (multiple closed polylines)", GH_ParamAccess.list);
+            pManager[1].Optional = true; // Mark Custom Curves as optional
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
@@ -62,8 +62,8 @@ namespace LilyPadGH.Components
             pManager.AddTextParameter("Parameters", "P", "Simulation parameters as text", GH_ParamAccess.item);
             pManager.AddRectangleParameter("Boundary Rectangle", "BR", "Boundary plane as rectangle", GH_ParamAccess.item);
             pManager.AddTextParameter("Boundary JSON", "BJ", "Boundary plane in JSON format", GH_ParamAccess.item);
-            pManager.AddTextParameter("Curve JSON", "CJ", "Custom curve points in JSON format", GH_ParamAccess.item);
-            pManager.AddPointParameter("Curve Points", "Pts", "Discretized curve points", GH_ParamAccess.list);
+            pManager.AddTextParameter("Curves JSON", "CJ", "Custom curves points in JSON format (multiple polylines)", GH_ParamAccess.item);
+            pManager.AddPointParameter("Curve Points", "Pts", "Discretized curve points from all curves", GH_ParamAccess.list);
 
             // NOTE: New output for Julia script results.
             pManager.AddTextParameter("Julia Output", "JO", "Output from the executed Julia script", GH_ParamAccess.item);
@@ -78,10 +78,10 @@ namespace LilyPadGH.Components
         {
             // --- Input Gathering ---
             Rectangle3d boundary = Rectangle3d.Unset;
-            Curve customCurve = null;
+            var customCurves = new List<Curve>();
 
             if (!DA.GetData(0, ref boundary)) return;
-            DA.GetData(1, ref customCurve); // Optional input
+            DA.GetDataList(1, customCurves); // Optional input - multiple curves
 
             if (!boundary.IsValid)
             {
@@ -115,19 +115,45 @@ namespace LilyPadGH.Components
 
             string curveJsonString = "{}";
             var curvePoints = new List<Point3d>();
-            if (customCurve != null && customCurve.IsValid)
+            if (customCurves != null && customCurves.Count > 0)
             {
-                customCurve.DivideByCount(_settings.CurveDivisions, true, out Point3d[] points);
-                if (points != null && points.Length > 0)
+                var polylinesList = new List<object>();
+
+                foreach (var curve in customCurves)
                 {
-                    curvePoints.AddRange(points);
-                    var pointListJson = new List<object>();
-                    foreach (var pt in points)
+                    if (curve != null && curve.IsValid)
                     {
-                        pointListJson.Add(new { x = pt.X, y = pt.Y, z = pt.Z });
+                        curve.DivideByCount(_settings.CurveDivisions, true, out Point3d[] points);
+                        if (points != null && points.Length > 0)
+                        {
+                            curvePoints.AddRange(points);
+                            var pointListJson = new List<object>();
+                            foreach (var pt in points)
+                            {
+                                pointListJson.Add(new { x = pt.X, y = pt.Y, z = pt.Z });
+                            }
+
+                            // Check if curve is closed
+                            bool isClosed = curve.IsClosed;
+
+                            polylinesList.Add(new {
+                                type = "closed_polyline",
+                                is_closed = isClosed,
+                                divisions = _settings.CurveDivisions,
+                                points = pointListJson
+                            });
+                        }
                     }
-                    var curveJson = new { type = "custom_curve", divisions = _settings.CurveDivisions, points = pointListJson };
-                    curveJsonString = JsonSerializer.Serialize(curveJson, new JsonSerializerOptions { WriteIndented = true });
+                }
+
+                if (polylinesList.Count > 0)
+                {
+                    var curvesJson = new {
+                        type = "multiple_closed_polylines",
+                        count = polylinesList.Count,
+                        polylines = polylinesList
+                    };
+                    curveJsonString = JsonSerializer.Serialize(curvesJson, new JsonSerializerOptions { WriteIndented = true });
                 }
             }
 
