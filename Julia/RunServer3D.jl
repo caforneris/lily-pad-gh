@@ -3,10 +3,10 @@
 # DESC: A persistent HTTP server that runs a headless WaterLily.jl simulation
 #       and optionally generates an MP4 animation of the results.
 # --- REVISIONS ---
-# - 2025-09-21 @ 10:50: Fixed ErrorException("type Simulation has no field time").
-#   - Simplified the animation loop to step by a fixed frame duration,
-#     removing the dependency on the sim.time internal variable.
-# - 2025-09-21 @ 10:38: Switched to CairoMakie for robust rendering.
+# - 2025-09-21 @ 10:58: Fixed blank animation output.
+#   - Added explicit camera controls to correctly frame the 3D scene.
+#   - Added automatic color range calculation to make the simulation visible.
+#   - Refactored animation loop to use Makie.Observables for correctness and performance.
 # ========================================
 
 using HTTP
@@ -60,16 +60,34 @@ function run_simulation_from_json(json_data)
             
             println("🎬 Starting animation recording to: ", anim_path)
             
-            fig = Figure(size=(600,600))
+            # --- Set up the Makie Scene ---
+            fig = Figure(size=(800, 800))
             ax = LScene(fig[1,1], show_axis=false)
-            vorticity = sim.flow.σ
+
+            # NOTE: Use an Observable to hold the vorticity data.
+            # This allows Makie to automatically update the plot when the data changes.
+            vorticity_data = sim.flow.σ
+            vorticity_obs = Observable(vorticity_data[inside(vorticity_data)])
+
+            # NOTE: Run a few steps to get initial data for setting the color range.
+            sim_step!(sim, 0.5)
+            @inside vorticity_data[I] = WaterLily.ω_mag(I, sim.flow.u)
+            max_vort = maximum(vorticity_data)
+            vorticity_obs[] = vorticity_data[inside(vorticity_data)] # Update observable
             
+            # NOTE: Create the volume plot once with the color range and bind it to the observable.
+            volume!(ax, vorticity_obs, algorithm=:mip, colormap=:algae, colorrange=(0, max_vort * 0.75))
+            
+            # NOTE: Set the camera position to get a good view of the simulation.
+            cam_pos = Vec3f(nx*1.5, ny*1.5, nz*1.5)
+            look_at = Vec3f(nx/2, ny/2, nz/2)
+            update_cam!(ax.scene, cam_pos, look_at)
+
+            # --- Record the Animation ---
             record(fig, anim_path, 0:frame_duration:duration; framerate=framerate) do t
-                # NOTE: Simplified the sim_step! call to use a fixed frame duration.
-                # This is more robust and avoids issues with internal time variables.
                 sim_step!(sim, frame_duration)
-                @inside vorticity[I] = WaterLily.ω_mag(I, sim.flow.u)
-                volume!(ax, vorticity, algorithm=:mip, colormap=:algae)
+                @inside vorticity_data[I] = WaterLily.ω_mag(I, sim.flow.u)
+                vorticity_obs[] = vorticity_data[inside(vorticity_data)] # This single line updates the plot!
             end
 
             println("✅ Animation saved.")
