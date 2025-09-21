@@ -16,6 +16,20 @@ namespace LilyPadGH.Components
     {
         // NOTE: Cached path to avoid repeated file system lookups.
         private static string _juliaExecutablePath = null;
+        private static string _customJuliaPath = null;
+
+        public static void SetCustomJuliaPath(string path)
+        {
+            if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+            {
+                string juliaExe = Path.Combine(path, "bin", "julia.exe");
+                if (File.Exists(juliaExe))
+                {
+                    _customJuliaPath = path;
+                    _juliaExecutablePath = null; // Clear cache to force re-evaluation
+                }
+            }
+        }
 
         private static string GetJuliaExecutablePath()
         {
@@ -25,21 +39,80 @@ namespace LilyPadGH.Components
                 return _juliaExecutablePath;
             }
 
-            // Get the directory where your .gha file is located.
-            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string juliaPath = null;
 
-            // Build the relative path to julia.exe.
-            string juliaPath = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "bin", "julia.exe");
-
-            if (!File.Exists(juliaPath))
+            // First, check if a custom path has been set
+            if (!string.IsNullOrEmpty(_customJuliaPath))
             {
-                throw new FileNotFoundException(
-                    "julia.exe not found. Check the .csproj file to ensure the 'Content Include' path is correct.",
-                    juliaPath);
+                juliaPath = Path.Combine(_customJuliaPath, "bin", "julia.exe");
+                if (File.Exists(juliaPath))
+                {
+                    _juliaExecutablePath = juliaPath;
+                    return _juliaExecutablePath;
+                }
             }
 
-            _juliaExecutablePath = juliaPath;
-            return _juliaExecutablePath;
+            // Second, check the user's AppData\Local\Programs for Julia installation
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string[] possibleJuliaVersions = { "Julia-1.11.7", "Julia-1.11.6", "Julia-1.11.5", "Julia-1.11", "Julia-1.10" };
+
+            foreach (var version in possibleJuliaVersions)
+            {
+                // Check the exact structure: AppData\Local\Programs\Julia-1.11.7\bin\julia.exe
+                juliaPath = Path.Combine(localAppData, "Programs", version, "bin", "julia.exe");
+                if (File.Exists(juliaPath))
+                {
+                    _juliaExecutablePath = juliaPath;
+                    return _juliaExecutablePath;
+                }
+            }
+
+            // Third, check the bundled Julia in the plugin directory
+            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            juliaPath = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "bin", "julia.exe");
+
+            if (File.Exists(juliaPath))
+            {
+                _juliaExecutablePath = juliaPath;
+                return _juliaExecutablePath;
+            }
+
+            // If we get here, no Julia installation was found
+            string expectedPath = Path.Combine(localAppData, "Programs", "Julia-1.11.7", "bin", "julia.exe");
+            throw new FileNotFoundException(
+                $"julia.exe not found. Please ensure Julia is installed at:\n" +
+                $"- {expectedPath}\n" +
+                $"Or provide a custom path via the Julia Path input.",
+                expectedPath);
+        }
+
+        public static string GetServerScriptPath()
+        {
+            // Check in the deployed package folder first
+            string packageDirectory = Environment.ExpandEnvironmentVariables(@"%appdata%\McNeel\Rhinoceros\packages\8.0\LilyPadGH\0.0.1");
+            string scriptPath = Path.Combine(packageDirectory, "Julia", "RunServer.jl");
+
+            if (File.Exists(scriptPath))
+            {
+                return scriptPath;
+            }
+
+            // Fallback to the gha directory (for development/debugging)
+            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            scriptPath = Path.Combine(ghaDirectory, "Julia", "RunServer.jl");
+
+            if (!File.Exists(scriptPath))
+            {
+                string packagePath = Path.Combine(packageDirectory, "Julia", "RunServer.jl");
+                throw new FileNotFoundException(
+                    $"RunServer.jl not found. Expected at:\n" +
+                    $"- Package folder: {packagePath}\n" +
+                    $"- Fallback folder: {scriptPath}\n" +
+                    $"Ensure the Julia scripts are deployed to the package folder.",
+                    scriptPath);
+            }
+
+            return scriptPath;
         }
 
         public static string RunScript(string scriptPath, string arguments)

@@ -53,7 +53,9 @@ namespace LilyPadGH.Components
             // NOTE: Core geometric inputs. All simulation parameters are handled via the Eto dialog.
             pManager.AddRectangleParameter("Boundary Plane", "B", "Boundary plane as rectangle (x,y dimensions)", GH_ParamAccess.item);
             pManager.AddCurveParameter("Custom Curves", "Crvs", "Optional custom curves to be discretized (multiple closed polylines)", GH_ParamAccess.list);
+            pManager.AddTextParameter("Julia Path", "JP", "Optional custom Julia installation path (e.g., C:\\Users\\YourName\\AppData\\Local\\Programs\\Julia-1.11.7)", GH_ParamAccess.item);
             pManager[1].Optional = true; // Mark Custom Curves as optional
+            pManager[2].Optional = true; // Mark Julia Path as optional
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
@@ -79,9 +81,17 @@ namespace LilyPadGH.Components
             // --- Input Gathering ---
             Rectangle3d boundary = Rectangle3d.Unset;
             var customCurves = new List<Curve>();
+            string customJuliaPath = string.Empty;
 
             if (!DA.GetData(0, ref boundary)) return;
             DA.GetDataList(1, customCurves); // Optional input - multiple curves
+            DA.GetData(2, ref customJuliaPath); // Optional input - custom Julia path
+
+            // Set custom Julia path if provided
+            if (!string.IsNullOrEmpty(customJuliaPath))
+            {
+                JuliaRunner.SetCustomJuliaPath(customJuliaPath);
+            }
 
             if (!boundary.IsValid)
             {
@@ -126,56 +136,74 @@ namespace LilyPadGH.Components
                         var pointListJson = new List<object>();
                         var collectedPoints = new List<Point3d>();
 
-                        // Explode the curve into segments
-                        Curve[] segments = curve.Explode();
+                        // Try to get polyline from curve for straight segment optimization
+                        Polyline polyline;
+                        bool isPolyline = curve.TryGetPolyline(out polyline);
 
-                        if (segments != null && segments.Length > 0)
+                        if (isPolyline && polyline != null)
                         {
-                            for (int i = 0; i < segments.Length; i++)
+                            // It's a polyline - just use the vertices (already optimized for straight lines)
+                            collectedPoints.AddRange(polyline);
+                        }
+                        else
+                        {
+                            // Try to check if it's a simple line
+                            if (curve.IsLinear())
                             {
-                                var segment = segments[i];
-                                if (segment != null && segment.IsValid)
+                                // It's a straight line - just use start and end points
+                                collectedPoints.Add(curve.PointAtStart);
+                                collectedPoints.Add(curve.PointAtEnd);
+                            }
+                            else
+                            {
+                                // It's a curve or complex shape - try to get segments
+                                Curve[] segments = curve.DuplicateSegments();
+
+                                if (segments != null && segments.Length > 0)
                                 {
-                                    // Check if segment is a straight line
-                                    bool isStraight = segment.IsLinear();
-
-                                    if (isStraight)
+                                    for (int i = 0; i < segments.Length; i++)
                                     {
-                                        // For straight lines, just use start point
-                                        var startPt = segment.PointAtStart;
-                                        collectedPoints.Add(startPt);
-
-                                        // Add end point only for last segment if not closed
-                                        if (i == segments.Length - 1 && !curve.IsClosed)
+                                        var segment = segments[i];
+                                        if (segment != null && segment.IsValid)
                                         {
-                                            var endPt = segment.PointAtEnd;
-                                            collectedPoints.Add(endPt);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        // For curved segments, subdivide
-                                        segment.DivideByCount(_settings.CurveDivisions, true, out Point3d[] points);
-                                        if (points != null && points.Length > 0)
-                                        {
-                                            // Skip last point if not the last segment (to avoid duplicates)
-                                            int pointsToAdd = (i < segments.Length - 1) ? points.Length - 1 : points.Length;
-                                            for (int j = 0; j < pointsToAdd; j++)
+                                            // Check if segment is a straight line
+                                            if (segment.IsLinear())
                                             {
-                                                collectedPoints.Add(points[j]);
+                                                // For straight lines, just use start point
+                                                collectedPoints.Add(segment.PointAtStart);
+
+                                                // Add end point only for last segment if not closed
+                                                if (i == segments.Length - 1 && !curve.IsClosed)
+                                                {
+                                                    collectedPoints.Add(segment.PointAtEnd);
+                                                }
+                                            }
+                                            else
+                                            {
+                                                // For curved segments, subdivide
+                                                segment.DivideByCount(_settings.CurveDivisions, true, out Point3d[] points);
+                                                if (points != null && points.Length > 0)
+                                                {
+                                                    // Skip last point if not the last segment (to avoid duplicates)
+                                                    int pointsToAdd = (i < segments.Length - 1) ? points.Length - 1 : points.Length;
+                                                    for (int j = 0; j < pointsToAdd; j++)
+                                                    {
+                                                        collectedPoints.Add(points[j]);
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            }
-                        }
-                        else
-                        {
-                            // Fallback: treat as single curve and subdivide
-                            curve.DivideByCount(_settings.CurveDivisions, true, out Point3d[] points);
-                            if (points != null && points.Length > 0)
-                            {
-                                collectedPoints.AddRange(points);
+                                else
+                                {
+                                    // Fallback: treat as single curve and subdivide
+                                    curve.DivideByCount(_settings.CurveDivisions, true, out Point3d[] points);
+                                    if (points != null && points.Length > 0)
+                                    {
+                                        collectedPoints.AddRange(points);
+                                    }
+                                }
                             }
                         }
 
@@ -214,26 +242,65 @@ namespace LilyPadGH.Components
             string juliaOutput = "Julia script not executed.";
             try
             {
-                // NOTE: Define the path to your Julia script relative to the .gha location.
-                string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-                string scriptPath = Path.Combine(ghaDirectory, "JuliaScripts", "simple_script.jl");
+                // Get the path to RunServer.jl in the deployed package
+                string serverScriptPath = JuliaRunner.GetServerScriptPath();
 
-                if (File.Exists(scriptPath))
+                if (File.Exists(serverScriptPath))
                 {
-                    // Pass a simple argument for demonstration.
-                    string args = $"Re={_settings.ReynoldsNumber}";
-                    juliaOutput = JuliaRunner.RunScript(scriptPath, args);
+                    // Create a JSON file with the boundary and curves data for Julia to read
+                    string packageDirectory = Environment.ExpandEnvironmentVariables(@"%appdata%\McNeel\Rhinoceros\packages\8.0\LilyPadGH\0.0.1");
+                    string juliaDataPath = Path.Combine(packageDirectory, "Julia", "input_data.json");
+
+                    // Create combined data for Julia including simulation parameters
+                    var juliaInputData = new
+                    {
+                        simulation_parameters = new
+                        {
+                            reynolds_number = _settings.ReynoldsNumber,
+                            velocity = _settings.Velocity,
+                            grid_resolution_x = _settings.GridResolutionX,
+                            grid_resolution_y = _settings.GridResolutionY,
+                            duration = _settings.Duration
+                        },
+                        boundary = new
+                        {
+                            type = "rectangle",
+                            center = new { x = boundary.Center.X, y = boundary.Center.Y, z = boundary.Center.Z },
+                            width = boundary.Width,
+                            height = boundary.Height,
+                            corner_points = new[]
+                            {
+                                new { x = boundary.Corner(0).X, y = boundary.Corner(0).Y },
+                                new { x = boundary.Corner(1).X, y = boundary.Corner(1).Y },
+                                new { x = boundary.Corner(2).X, y = boundary.Corner(2).Y },
+                                new { x = boundary.Corner(3).X, y = boundary.Corner(3).Y }
+                            }
+                        },
+                        curves = new
+                        {
+                            type = "multiple_closed_polylines",
+                            count = customCurves?.Count ?? 0,
+                            curves_json = curveJsonString
+                        }
+                    };
+
+                    string juliaInputJson = JsonSerializer.Serialize(juliaInputData, new JsonSerializerOptions { WriteIndented = true });
+                    File.WriteAllText(juliaDataPath, juliaInputJson);
+
+                    // Run Julia server with the data file path
+                    string args = $"\"{juliaDataPath}\"";
+                    juliaOutput = JuliaRunner.RunScript(serverScriptPath, args);
                 }
                 else
                 {
-                    juliaOutput = "Error: simple_script.jl not found. Ensure it's in a 'JuliaScripts' folder and set to 'Copy if newer'.";
+                    juliaOutput = $"Error: RunServer.jl not found at {serverScriptPath}";
                 }
             }
             catch (Exception ex)
             {
                 // Display Julia errors on the component itself.
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Julia Error: {ex.Message}");
-                juliaOutput = "Execution failed. See component error message.";
+                juliaOutput = $"Execution failed: {ex.Message}";
             }
 
             // --- Output Assignment ---
