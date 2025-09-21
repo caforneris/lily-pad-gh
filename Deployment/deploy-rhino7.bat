@@ -31,6 +31,20 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM ─── Copy Julia files ────────────────────────────────────────────────────
+echo Copying Julia files...
+if exist "%TARGET_DIR%Julia\" (
+    xcopy /Y /E /I "%TARGET_DIR%Julia\*" "%DEPLOY_PATH%\Julia\" >nul
+    if errorlevel 1 (
+        echo WARNING: Some Julia files may not have copied
+    ) else (
+        echo ✓ Julia files copied successfully
+    )
+) else (
+    echo WARNING: Julia directory not found at %TARGET_DIR%Julia\
+)
+
+
 REM ─── DO NOT DELETE if deploying to Both - master script handles cleanup ───
 REM The master deploy.bat script will handle deletion after all deployments
 
