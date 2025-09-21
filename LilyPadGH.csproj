@@ -64,7 +64,14 @@
   </PropertyGroup>
   
   <ItemGroup>
+    <Compile Remove="Components\PostJson.cs" />
+    <Compile Remove="Components\StartStopJulia.cs" />
+  </ItemGroup>
+  
+  <ItemGroup>
     <None Remove="Icons\CFDAnalysisIcon.png" />
+    <None Remove="Julia\Manifest.toml" />
+    <None Remove="Julia\Project.toml" />
     <None Remove="Julia\RunServer3D.jl" />
   </ItemGroup>
   
@@ -117,6 +124,12 @@
 
 	<!-- Julia Scripts -->
 	<ItemGroup>
+		<Content Include="Julia\Manifest.toml">
+		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+		<Content Include="Julia\Project.toml">
+		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
 		<Content Include="Julia\RunServer.jl">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
@@ -126,6 +139,10 @@
 		<Content Include="Julia\RunServer3D.jl">
 		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
+	</ItemGroup>
+	<ItemGroup>
+	  <None Include="Components\PostJson.cs" />
+	  <None Include="Components\StartStopJulia.cs" />
 	</ItemGroup>
 	
 

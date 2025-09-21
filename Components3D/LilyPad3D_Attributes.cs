@@ -43,7 +43,6 @@ namespace LilyPadGH.Components3D
             {
                 if (!(Owner is LilyPad3DComponent comp)) return;
 
-                // NOTE: Visual feedback now reflects the server's running state.
                 GH_Palette palette = comp._isServerRunning ? GH_Palette.Blue : GH_Palette.Black;
                 string text = comp._isServerRunning ? "Server Control..." : "Configure...";
 
