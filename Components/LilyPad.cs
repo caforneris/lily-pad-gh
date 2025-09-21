@@ -123,26 +123,79 @@ namespace LilyPadGH.Components
                 {
                     if (curve != null && curve.IsValid)
                     {
-                        curve.DivideByCount(_settings.CurveDivisions, true, out Point3d[] points);
-                        if (points != null && points.Length > 0)
+                        var pointListJson = new List<object>();
+                        var collectedPoints = new List<Point3d>();
+
+                        // Explode the curve into segments
+                        Curve[] segments = curve.Explode();
+
+                        if (segments != null && segments.Length > 0)
                         {
-                            curvePoints.AddRange(points);
-                            var pointListJson = new List<object>();
-                            foreach (var pt in points)
+                            for (int i = 0; i < segments.Length; i++)
                             {
-                                pointListJson.Add(new { x = pt.X, y = pt.Y, z = pt.Z });
+                                var segment = segments[i];
+                                if (segment != null && segment.IsValid)
+                                {
+                                    // Check if segment is a straight line
+                                    bool isStraight = segment.IsLinear();
+
+                                    if (isStraight)
+                                    {
+                                        // For straight lines, just use start point
+                                        var startPt = segment.PointAtStart;
+                                        collectedPoints.Add(startPt);
+
+                                        // Add end point only for last segment if not closed
+                                        if (i == segments.Length - 1 && !curve.IsClosed)
+                                        {
+                                            var endPt = segment.PointAtEnd;
+                                            collectedPoints.Add(endPt);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // For curved segments, subdivide
+                                        segment.DivideByCount(_settings.CurveDivisions, true, out Point3d[] points);
+                                        if (points != null && points.Length > 0)
+                                        {
+                                            // Skip last point if not the last segment (to avoid duplicates)
+                                            int pointsToAdd = (i < segments.Length - 1) ? points.Length - 1 : points.Length;
+                                            for (int j = 0; j < pointsToAdd; j++)
+                                            {
+                                                collectedPoints.Add(points[j]);
+                                            }
+                                        }
+                                    }
+                                }
                             }
-
-                            // Check if curve is closed
-                            bool isClosed = curve.IsClosed;
-
-                            polylinesList.Add(new {
-                                type = "closed_polyline",
-                                is_closed = isClosed,
-                                divisions = _settings.CurveDivisions,
-                                points = pointListJson
-                            });
                         }
+                        else
+                        {
+                            // Fallback: treat as single curve and subdivide
+                            curve.DivideByCount(_settings.CurveDivisions, true, out Point3d[] points);
+                            if (points != null && points.Length > 0)
+                            {
+                                collectedPoints.AddRange(points);
+                            }
+                        }
+
+                        // Add collected points to both the output list and JSON
+                        curvePoints.AddRange(collectedPoints);
+                        foreach (var pt in collectedPoints)
+                        {
+                            pointListJson.Add(new { x = pt.X, y = pt.Y, z = pt.Z });
+                        }
+
+                        // Check if curve is closed
+                        bool isClosed = curve.IsClosed;
+
+                        // Use original simple structure
+                        polylinesList.Add(new {
+                            type = "closed_polyline",
+                            is_closed = isClosed,
+                            divisions = _settings.CurveDivisions,
+                            points = pointListJson
+                        });
                     }
                 }
 
