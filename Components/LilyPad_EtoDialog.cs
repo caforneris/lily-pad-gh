@@ -25,10 +25,18 @@ namespace LilyPadGH.Components
         private NumericStepper _durationStepper;
         private NumericStepper _curveDivisionsStepper;
         private Button _runStopButton;
+        private Button _startServerButton;
+        private Button _stopServerButton;
+        private Button _pushDataButton;
 
         // Events for starting/stopping the analysis
         public event Action<LilyPadCfdSettings> OnRunClicked;
         public event Action OnStopClicked;
+
+        // Events for server control and data pushing
+        public event Action OnStartServerClicked;
+        public event Action OnStopServerClicked;
+        public event Action OnPushDataClicked;
 
         public LilyPadCfdDialog(LilyPadCfdSettings currentSettings)
         {
@@ -51,6 +59,17 @@ namespace LilyPadGH.Components
             _runStopButton.Text = isRunning ? "Stop Analysis" : "Apply & Run";
         }
 
+        public void SetServerState(bool isServerRunning)
+        {
+            _startServerButton.Enabled = !isServerRunning;
+            _stopServerButton.Enabled = isServerRunning;
+            _pushDataButton.Enabled = isServerRunning;
+
+            _startServerButton.Text = isServerRunning ? "Server Running" : "Start Julia Server";
+            _stopServerButton.Text = "Stop Julia Server";
+            _pushDataButton.Text = isServerRunning ? "Push Data to Server" : "Server Not Running";
+        }
+
         private void BuildUI()
         {
             Title = "CFD Simulation Control";
@@ -67,6 +86,17 @@ namespace LilyPadGH.Components
 
             _runStopButton = new Button();
             _runStopButton.Click += OnRunStopButtonClick;
+
+            // Server control buttons
+            _startServerButton = new Button { Text = "Start Julia Server" };
+            _startServerButton.Click += (s, e) => OnStartServerClicked?.Invoke();
+
+            _stopServerButton = new Button { Text = "Stop Julia Server", Enabled = false };
+            _stopServerButton.Click += (s, e) => OnStopServerClicked?.Invoke();
+
+            _pushDataButton = new Button { Text = "Server Not Running", Enabled = false };
+            _pushDataButton.Click += (s, e) => OnPushDataClicked?.Invoke();
+
             var closeButton = new Button { Text = "Close" };
             closeButton.Click += (s, e) => Close();
 
@@ -81,6 +111,19 @@ namespace LilyPadGH.Components
             layout.AddRow(new Label { Text = "Curve Divisions:" }, null, _curveDivisionsStepper);
             layout.Add(null, yscale: true); // Flexible spacer
 
+            // Server control section
+            layout.AddRow(new Label { Text = "Julia Server Control:", Font = new Font(SystemFont.Bold) });
+            var serverButtonLayout = new TableLayout
+            {
+                Spacing = new Size(5, 5),
+                Rows = { new TableRow(_startServerButton, _stopServerButton) }
+            };
+            layout.Add(serverButtonLayout);
+
+            // Data push section
+            layout.AddRow(_pushDataButton);
+
+            // Main action buttons
             var buttonLayout = new TableLayout
             {
                 Spacing = new Size(5, 5),
@@ -100,6 +143,7 @@ namespace LilyPadGH.Components
             _durationStepper.Value = _settings.Duration;
             _curveDivisionsStepper.Value = _settings.CurveDivisions;
             SetRunningState(false); // Initial state is always 'not running'
+            SetServerState(false); // Initial server state is not running
         }
 
         private void UpdateSettingsFromUI()
