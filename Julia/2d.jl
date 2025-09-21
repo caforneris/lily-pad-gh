@@ -82,17 +82,43 @@ function simplify_polyline_points(px::Vector{T}, py::Vector{T}, tolerance::T, ma
     return simplified_px, simplified_py
 end
 
-function run_sim(raw_string::AbstractString; L=2^5,U=1,Re=250,mem=Array)
-    # using CUDA
-    # intialize and run
-    sim = make_sim(raw_string; L=L, U=U, Re=Re, mem=mem)#;mem=CuArray)
+function run_sim(raw_string::AbstractString; mem=Array)
+    # Parse JSON to extract simulation parameters
+    local L, U, Re, anim_duration, plot_body, gif_obj, gif_filename
+
+    try
+        data = JSON3.read(raw_string)
+        params = data.simulation_parameters
+
+        # Extract parameters with defaults
+        L = get(params, :L, 32)
+        U = get(params, :U, 1.0)
+        Re = get(params, :Re, 250.0)
+        anim_duration = get(params, :animation_duration, 1.0)
+        plot_body = get(params, :plot_body, true)
+
+        println("🎛️  Using simulation parameters:")
+        println("   L = $L, U = $U, Re = $Re")
+        println("   Animation duration = $anim_duration s, Plot body = $plot_body")
+
+    catch e
+        println("❌ Error parsing parameters: $e")
+        # Fallback with default parameters
+        L, U, Re = 32, 1.0, 250.0
+        anim_duration, plot_body = 1.0, true
+        println("🔧 Using fallback parameters: L=$L, U=$U, Re=$Re")
+    end
+
+    # Create simulation with parameters from JSON
+    println("🎯 Creating simulation with: L=$L, U=$U, Re=$Re")
+    sim = make_sim(raw_string; L=L, U=U, Re=Re, mem=mem)
 
     # Generate a unique filename for the GIF and save to package temp folder
     timestamp = Dates.format(now(), "yyyymmdd_HHMMSS")
     gif_filename = "simulation_$(timestamp).gif"
 
     # Create the GIF (sim_gif! returns an AnimatedGif object)
-    gif_obj = sim_gif!(sim, duration=1, clims=(-10,10), plotbody=true)
+    gif_obj = sim_gif!(sim, duration=anim_duration, clims=(-10,10), plotbody=plot_body)
 
     # Get the actual file path from the GIF object
     actual_path = gif_obj.filename
@@ -137,6 +163,26 @@ end
 function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float32)
 
     println("running")
+
+    # Extract point reduction parameters from JSON
+    local simplify_tolerance, max_points_per_poly
+    try
+        data = JSON3.read(raw_string)
+        if haskey(data, :simulation_parameters)
+            params = data.simulation_parameters
+            simplify_tolerance = T(get(params, :simplify_tolerance, 0.0))  # No simplification by default
+            max_points_per_poly = get(params, :max_points_per_poly, 1000)  # Very high limit by default
+        else
+            simplify_tolerance = T(0.0)  # No simplification by default
+            max_points_per_poly = 1000  # Very high limit by default
+        end
+        println("🔧 Point reduction: tolerance=$simplify_tolerance, max_points=$max_points_per_poly")
+    catch e
+        println("⚠️  Could not extract point reduction params: $e")
+        simplify_tolerance = T(0.0)  # No simplification by default
+        max_points_per_poly = 1000  # Very high limit by default
+    end
+
     # Try to load custom JSON body, fallback to circle
     body = try
         script_dir = @__DIR__
@@ -165,8 +211,14 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
                     py_orig = [T(p["y"]) for p in polyline["points"]]
                     total_original += length(px_orig)
 
-                    # Simplify the polyline
-                    px, py = simplify_polyline_points(px_orig, py_orig, T(SIMPLIFY_TOLERANCE), MAX_POINTS_PER_POLY)
+                    # Simplify the polyline using parameters from JSON
+                    if simplify_tolerance > 0.0 && max_points_per_poly < length(px_orig)
+                        px, py = simplify_polyline_points(px_orig, py_orig, simplify_tolerance, max_points_per_poly)
+                        println("  📉 Simplified polyline: $(length(px_orig)) → $(length(px)) points")
+                    else
+                        px, py = px_orig, py_orig
+                        println("  ✅ No simplification: keeping all $(length(px)) points")
+                    end
                     total_simplified += length(px)
 
                     push!(simplified_polylines, (px, py))
@@ -184,10 +236,20 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
             x_min, x_max = extrema(all_px)
             y_min, y_max = extrema(all_py)
 
-            # Scale to simulation domain (8L x 4L) and center
-            scale = T(min(6L/(x_max-x_min), 3L/(y_max-y_min)))  # Leave some margin
-            cx = T(4L)  # center x
-            cy = T(2L)  # center y
+            # Scale to simulation domain and center - less aggressive scaling
+            domain_width = 8L
+            domain_height = 4L
+
+            # Use more reasonable scaling that preserves object size better
+            scale_x = (domain_width * 0.3) / (x_max - x_min)  # Use 30% of domain width
+            scale_y = (domain_height * 0.3) / (y_max - y_min)  # Use 30% of domain height
+            scale = T(min(scale_x, scale_y))  # Use smaller scale to fit both dimensions
+
+            cx = T(domain_width / 2)   # center x
+            cy = T(domain_height / 2)  # center y
+
+            println("🔧 Scaling: object bounds ($x_min,$y_min) to ($x_max,$y_max)")
+            println("🔧 Domain: $(domain_width)×$(domain_height), scale factor: $scale")
 
             # Create optimized SDF function for multiple polylines (union)
             @fastmath @inline function multi_poly_sdf(x, t)
@@ -262,10 +324,20 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
             x_min, x_max = extrema(px)
             y_min, y_max = extrema(py)
 
-            # Scale to simulation domain (8L x 4L) and center
-            scale = min(6L/(x_max-x_min), 3L/(y_max-y_min))  # Leave some margin
-            cx = 4L  # center x
-            cy = 2L  # center y
+            # Scale to simulation domain and center - less aggressive scaling
+            domain_width = 8L
+            domain_height = 4L
+
+            # Use more reasonable scaling that preserves object size better
+            scale_x = (domain_width * 0.3) / (x_max - x_min)  # Use 30% of domain width
+            scale_y = (domain_height * 0.3) / (y_max - y_min)  # Use 30% of domain height
+            scale = min(scale_x, scale_y)  # Use smaller scale to fit both dimensions
+
+            cx = domain_width / 2   # center x
+            cy = domain_height / 2  # center y
+
+            println("🔧 Legacy scaling: object bounds ($x_min,$y_min) to ($x_max,$y_max)")
+            println("🔧 Domain: $(domain_width)×$(domain_height), scale factor: $scale")
 
             # Simple polygon SDF using point-in-polygon
             function poly_sdf(x, t)

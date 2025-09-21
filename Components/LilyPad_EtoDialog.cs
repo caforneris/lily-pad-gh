@@ -24,19 +24,28 @@ namespace LilyPadGH.Components
         private NumericStepper _gridYStepper;
         private NumericStepper _durationStepper;
         private NumericStepper _curveDivisionsStepper;
+
+        // Julia-specific controls
+        private NumericStepper _simulationLStepper;
+        private NumericStepper _simulationUStepper;
+        private NumericStepper _animationDurationStepper;
+        private CheckBox _plotBodyCheckBox;
+        private NumericStepper _simplifyToleranceStepper;
+        private NumericStepper _maxPointsPerPolyStepper;
+
         private Button _runStopButton;
         private Button _startServerButton;
         private Button _stopServerButton;
-        private Button _pushDataButton;
+        private Button _applyParametersButton;
 
         // Events for starting/stopping the analysis
         public event Action<LilyPadCfdSettings> OnRunClicked;
         public event Action OnStopClicked;
 
-        // Events for server control and data pushing
+        // Events for server control and parameter application
         public event Action OnStartServerClicked;
         public event Action OnStopServerClicked;
-        public event Action OnPushDataClicked;
+        public event Action<LilyPadCfdSettings> OnApplyParametersClicked;
 
         public LilyPadCfdDialog(LilyPadCfdSettings currentSettings)
         {
@@ -56,6 +65,14 @@ namespace LilyPadGH.Components
             _durationStepper.Enabled = controlsEnabled;
             _curveDivisionsStepper.Enabled = controlsEnabled;
 
+            // Julia-specific controls
+            _simulationLStepper.Enabled = controlsEnabled;
+            _simulationUStepper.Enabled = controlsEnabled;
+            _animationDurationStepper.Enabled = controlsEnabled;
+            _plotBodyCheckBox.Enabled = controlsEnabled;
+            _simplifyToleranceStepper.Enabled = controlsEnabled;
+            _maxPointsPerPolyStepper.Enabled = controlsEnabled;
+
             _runStopButton.Text = isRunning ? "Stop Analysis" : "Apply & Run";
         }
 
@@ -63,17 +80,18 @@ namespace LilyPadGH.Components
         {
             _startServerButton.Enabled = !isServerRunning;
             _stopServerButton.Enabled = isServerRunning;
-            _pushDataButton.Enabled = isServerRunning;
+            _applyParametersButton.Enabled = isServerRunning;
 
             _startServerButton.Text = isServerRunning ? "Server Running" : "Start Julia Server";
             _stopServerButton.Text = "Stop Julia Server";
-            _pushDataButton.Text = isServerRunning ? "Push Data to Server" : "Server Not Running";
+            _applyParametersButton.Text = isServerRunning ? "Apply Parameters & Run Simulation" : "Start Server First";
+            _applyParametersButton.BackgroundColor = isServerRunning ? Color.FromArgb(70, 130, 180) : Color.FromArgb(128, 128, 128);
         }
 
         private void BuildUI()
         {
             Title = "CFD Simulation Control";
-            MinimumSize = new Size(400, 300);
+            MinimumSize = new Size(450, 600);
             Resizable = true;
 
             // --- Control Initialisation ---
@@ -83,6 +101,14 @@ namespace LilyPadGH.Components
             _gridYStepper = new NumericStepper { MinValue = 10, Increment = 8 };
             _durationStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 2, Increment = 1.0 };
             _curveDivisionsStepper = new NumericStepper { MinValue = 2, Increment = 1 };
+
+            // Julia-specific controls
+            _simulationLStepper = new NumericStepper { MinValue = 16, MaxValue = 128, Increment = 8, Value = 32 };
+            _simulationUStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 2, Increment = 0.1, Value = 1.0 };
+            _animationDurationStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 1, Increment = 0.5, Value = 1.0 };
+            _plotBodyCheckBox = new CheckBox { Text = "Show Body in Animation", Checked = true };
+            _simplifyToleranceStepper = new NumericStepper { MinValue = 0.0, MaxValue = 0.5, DecimalPlaces = 3, Increment = 0.001, Value = 0.0 };
+            _maxPointsPerPolyStepper = new NumericStepper { MinValue = 5, MaxValue = 1000, Increment = 10, Value = 1000 };
 
             _runStopButton = new Button();
             _runStopButton.Click += OnRunStopButtonClick;
@@ -94,8 +120,8 @@ namespace LilyPadGH.Components
             _stopServerButton = new Button { Text = "Stop Julia Server", Enabled = false };
             _stopServerButton.Click += (s, e) => OnStopServerClicked?.Invoke();
 
-            _pushDataButton = new Button { Text = "Server Not Running", Enabled = false };
-            _pushDataButton.Click += (s, e) => OnPushDataClicked?.Invoke();
+            _applyParametersButton = new Button { Text = "Start Server First", Enabled = false, BackgroundColor = Color.FromArgb(128, 128, 128) };
+            _applyParametersButton.Click += OnApplyParametersButtonClick;
 
             var closeButton = new Button { Text = "Close" };
             closeButton.Click += (s, e) => Close();
@@ -109,6 +135,19 @@ namespace LilyPadGH.Components
             layout.AddRow(new Label { Text = "Grid Resolution Y:" }, null, _gridYStepper);
             layout.AddRow(new Label { Text = "Simulation Duration (s):" }, null, _durationStepper);
             layout.AddRow(new Label { Text = "Curve Divisions:" }, null, _curveDivisionsStepper);
+
+            // Julia simulation parameters section
+            layout.AddRow(new Label { Text = "Julia Simulation Parameters:", Font = new Font(SystemFont.Bold) });
+            layout.AddRow(new Label { Text = "Simulation Scale (L):" }, null, _simulationLStepper);
+            layout.AddRow(new Label { Text = "Flow Scale (U):" }, null, _simulationUStepper);
+            layout.AddRow(new Label { Text = "Animation Duration (s):" }, null, _animationDurationStepper);
+            layout.AddRow(_plotBodyCheckBox);
+
+            // Julia point reduction section
+            layout.AddRow(new Label { Text = "Point Reduction Settings:", Font = new Font(SystemFont.Bold) });
+            layout.AddRow(new Label { Text = "Simplify Tolerance:" }, null, _simplifyToleranceStepper);
+            layout.AddRow(new Label { Text = "Max Points Per Polyline:" }, null, _maxPointsPerPolyStepper);
+
             layout.Add(null, yscale: true); // Flexible spacer
 
             // Server control section
@@ -120,8 +159,8 @@ namespace LilyPadGH.Components
             };
             layout.Add(serverButtonLayout);
 
-            // Data push section
-            layout.AddRow(_pushDataButton);
+            // Apply parameters section
+            layout.AddRow(_applyParametersButton);
 
             // Main action buttons
             var buttonLayout = new TableLayout
@@ -142,6 +181,15 @@ namespace LilyPadGH.Components
             _gridYStepper.Value = _settings.GridResolutionY;
             _durationStepper.Value = _settings.Duration;
             _curveDivisionsStepper.Value = _settings.CurveDivisions;
+
+            // Load Julia-specific settings
+            _simulationLStepper.Value = _settings.SimulationL;
+            _simulationUStepper.Value = _settings.SimulationU;
+            _animationDurationStepper.Value = _settings.AnimationDuration;
+            _plotBodyCheckBox.Checked = _settings.PlotBody;
+            _simplifyToleranceStepper.Value = _settings.SimplifyTolerance;
+            _maxPointsPerPolyStepper.Value = _settings.MaxPointsPerPoly;
+
             SetRunningState(false); // Initial state is always 'not running'
             SetServerState(false); // Initial server state is not running
         }
@@ -154,6 +202,14 @@ namespace LilyPadGH.Components
             _settings.GridResolutionY = (int)_gridYStepper.Value;
             _settings.Duration = _durationStepper.Value;
             _settings.CurveDivisions = (int)_curveDivisionsStepper.Value;
+
+            // Update Julia-specific settings
+            _settings.SimulationL = (int)_simulationLStepper.Value;
+            _settings.SimulationU = _simulationUStepper.Value;
+            _settings.AnimationDuration = _animationDurationStepper.Value;
+            _settings.PlotBody = _plotBodyCheckBox.Checked ?? true;
+            _settings.SimplifyTolerance = _simplifyToleranceStepper.Value;
+            _settings.MaxPointsPerPoly = (int)_maxPointsPerPolyStepper.Value;
         }
 
         private void OnRunStopButtonClick(object sender, EventArgs e)
@@ -167,6 +223,12 @@ namespace LilyPadGH.Components
             {
                 OnStopClicked?.Invoke();
             }
+        }
+
+        private void OnApplyParametersButtonClick(object sender, EventArgs e)
+        {
+            UpdateSettingsFromUI();
+            OnApplyParametersClicked?.Invoke(_settings);
         }
     }
 }

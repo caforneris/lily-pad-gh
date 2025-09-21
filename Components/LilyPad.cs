@@ -282,7 +282,7 @@ namespace LilyPadGH.Components
             DA.SetData(6, juliaOutput); // Set the new Julia output
 
             // Update component message on canvas
-            Message = _isRunning ? "Running..." : "Configured";
+            Message = _isRunning ? "Running..." : (_isServerRunning ? "Ready" : "Configured");
         }
 
 
@@ -303,7 +303,7 @@ namespace LilyPadGH.Components
             _activeDialog.OnStopClicked += HandleStopClicked;
             _activeDialog.OnStartServerClicked += HandleStartServerClicked;
             _activeDialog.OnStopServerClicked += HandleStopServerClicked;
-            _activeDialog.OnPushDataClicked += HandlePushDataClicked;
+            _activeDialog.OnApplyParametersClicked += HandleApplyParametersClicked;
 
             _activeDialog.SetRunningState(_isRunning);
             _activeDialog.SetServerState(_isServerRunning);
@@ -313,7 +313,7 @@ namespace LilyPadGH.Components
                 _activeDialog.OnStopClicked -= HandleStopClicked;
                 _activeDialog.OnStartServerClicked -= HandleStartServerClicked;
                 _activeDialog.OnStopServerClicked -= HandleStopServerClicked;
-                _activeDialog.OnPushDataClicked -= HandlePushDataClicked;
+                _activeDialog.OnApplyParametersClicked -= HandleApplyParametersClicked;
                 _activeDialog = null;
             };
 
@@ -380,6 +380,7 @@ namespace LilyPadGH.Components
                 _activeDialog?.SetServerState(_isServerRunning);
 
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Julia server started successfully");
+                Message = "Server Ready";
                 ExpireSolution(true);
             }
             catch (Exception ex)
@@ -413,6 +414,7 @@ namespace LilyPadGH.Components
                 _activeDialog?.SetServerState(_isServerRunning);
 
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Julia server stopped successfully");
+                Message = "Configured";
                 ExpireSolution(true);
             }
             catch (Exception ex)
@@ -431,7 +433,7 @@ namespace LilyPadGH.Components
             }
         }
 
-        private void HandlePushDataClicked()
+        private void HandleApplyParametersClicked(LilyPadCfdSettings newSettings)
         {
             if (!_isServerRunning)
             {
@@ -439,43 +441,74 @@ namespace LilyPadGH.Components
                 return;
             }
 
-            try
+            // Update settings and expire solution to regenerate geometry with new parameters
+            _settings = newSettings;
+            ExpireSolution(true);
+
+            // Wait a moment for the solution to update, then push to server
+            Task.Run(async () =>
             {
-                // Create the JSON data to send to server
-                var serverData = new
+                await Task.Delay(500); // Give time for geometry to update
+
+                try
                 {
-                    simulation_parameters = new
+                    // Create the JSON data to send to server
+                    var serverData = new
                     {
-                        reynolds_number = _settings.ReynoldsNumber,
-                        velocity = _settings.Velocity,
-                        grid_resolution_x = _settings.GridResolutionX,
-                        grid_resolution_y = _settings.GridResolutionY,
-                        duration = _settings.Duration
-                    },
-                    polylines = JsonSerializer.Deserialize<JsonElement>(_currentCurvesJson).GetProperty("polylines")
-                };
+                        simulation_parameters = new
+                        {
+                            // Original GH simulation parameters
+                            reynolds_number = _settings.ReynoldsNumber,
+                            velocity = _settings.Velocity,
+                            grid_resolution_x = _settings.GridResolutionX,
+                            grid_resolution_y = _settings.GridResolutionY,
+                            duration = _settings.Duration,
+                            curve_divisions = _settings.CurveDivisions,
 
-                string jsonData = JsonSerializer.Serialize(serverData, new JsonSerializerOptions { WriteIndented = true });
+                            // Julia-specific parameters
+                            L = _settings.SimulationL,
+                            U = _settings.SimulationU,
+                            Re = _settings.ReynoldsNumber, // Use Reynolds from GH
+                            animation_duration = _settings.AnimationDuration,
+                            plot_body = _settings.PlotBody,
+                            simplify_tolerance = _settings.SimplifyTolerance,
+                            max_points_per_poly = _settings.MaxPointsPerPoly
+                        },
+                        polylines = JsonSerializer.Deserialize<JsonElement>(_currentCurvesJson).GetProperty("polylines")
+                    };
 
-                using var client = new HttpClient();
-                client.Timeout = TimeSpan.FromSeconds(30);
-                var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
-                var response = client.PostAsync("http://localhost:8080/", content).GetAwaiter().GetResult();
+                    string jsonData = JsonSerializer.Serialize(serverData, new JsonSerializerOptions { WriteIndented = true });
 
-                if (response.IsSuccessStatusCode)
-                {
-                    string responseText = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-                    AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, $"Data pushed successfully: {responseText}");
+                    using var client = new HttpClient();
+                    client.Timeout = TimeSpan.FromSeconds(30);
+                    var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
+                    var response = await client.PostAsync("http://localhost:8080/", content);
+
+                    RhinoApp.InvokeOnUiThread(() =>
+                    {
+                        if (response.IsSuccessStatusCode)
+                        {
+                            string responseText = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                            AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, $"Parameters applied and simulation started: {responseText}");
+
+                            // Change component button color to indicate successful run
+                            Message = "Running Simulation...";
+                            ExpireSolution(true);
+                        }
+                        else
+                        {
+                            AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Server returned error: {response.StatusCode}");
+                        }
+                    });
                 }
-                else
+                catch (Exception ex)
                 {
-                    AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Server returned error: {response.StatusCode}");
+                    RhinoApp.InvokeOnUiThread(() =>
+                    {
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Failed to apply parameters: {ex.Message}");
+                    });
                 }
-            }
-            catch (Exception ex)
-            {
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Failed to push data to server: {ex.Message}");
-            }
+            });
         }
 
         private async Task RunSimulationAsync(CancellationToken token)
