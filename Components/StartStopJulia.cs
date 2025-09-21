@@ -3,6 +3,7 @@ using Rhino.Geometry;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Net.Http;
 
 namespace LilyPadGH.Components
@@ -26,6 +27,7 @@ namespace LilyPadGH.Components
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
         {
             pManager.AddBooleanParameter("Run", "Run", "If set to true, server will be on. If false, server will be off", GH_ParamAccess.item);
+            pManager.AddTextParameter("Julia Install Directory", "Julia Install Directory", "Julia Install Directory", GH_ParamAccess.item);
         }
 
         /// <summary>
@@ -43,15 +45,26 @@ namespace LilyPadGH.Components
         protected override void SolveInstance(IGH_DataAccess DA)
         {
             var run = false;
+            var installDir = "";
             DA.GetData(0, ref run);
+            DA.GetData(1, ref installDir);
+
+            var threadCount = Environment.ProcessorCount;
+
+            var runServerPath = $"{installDir}\\RunServer.jl";
+            if (!Path.Exists(runServerPath))
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Install path {runServerPath} does not exist");
+                return;
+            }
 
             if (run && (_process == null || _process.HasExited))
             { _process = new Process()
                 {
                     StartInfo = new ProcessStartInfo
                     {
-                        FileName = "C:\\Users\\grued\\AppData\\Local\\Programs\\Julia-1.11.7\\bin\\julia.exe",
-                        Arguments = "C:\\Repos\\lily-pad-gh\\Julia\\RunServer.jl",
+                        FileName = "julia",
+                        Arguments = $"--threads {threadCount} {runServerPath}",
                         UseShellExecute = true,                       // must be true to open a new window
                         CreateNoWindow = false,                       // show the window
                         WindowStyle = ProcessWindowStyle.Normal       // optional: Normal, Minimized, etc.
