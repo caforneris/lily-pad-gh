@@ -17,7 +17,7 @@ namespace LilyPad.Components
         public PostJson()
             : base("PostJson", "PostJson",
                 "Sends Json to Julia",
-                "LilyPad", "Utilities")
+                "LilyPadGH", "Utilities")
         {
         }
 
