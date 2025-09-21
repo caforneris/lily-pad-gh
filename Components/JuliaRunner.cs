@@ -1,5 +1,6 @@
 ﻿// ========================================
 // FILE: JuliaRunner.cs
+// PART 5: JULIA PROCESS MANAGEMENT
 // DESC: A static helper class to manage finding and executing the standalone
 //       Julia process bundled with Lily Pad plugin.
 // ========================================
