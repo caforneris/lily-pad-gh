@@ -7,8 +7,11 @@
 // --- REVISIONS ---
 // - 2025-09-20 @ 18:24: Added Julia integration.
 //   - Added a new output parameter for Julia results.
-//   - Updated SolveInstance to call the new JuliaRunner class.
-//   - Added a "JuliaScripts" folder to the project structure.
+//   - Updated SolveInstance with integrated Julia server control.
+//   - Added Julia scripts and HTTP server communication.
+// - 2025-09-21: Integrated server control into main component.
+//   - Removed dependency on separate JuliaRunner class.
+//   - Added server start/stop and data push buttons to ETO dialog.
 // ========================================
 
 using Grasshopper.Kernel;
@@ -18,10 +21,13 @@ using Rhino.UI;
 using System;
 using System.Collections.Generic;
 using System.IO; // NOTE: Added for Path.Combine
+using System.Net.Http;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Diagnostics;
 
 // Resolve namespace conflicts - Grasshopper uses System.Drawing
 using GH_Bitmap = System.Drawing.Bitmap;
@@ -32,12 +38,18 @@ namespace LilyPadGH.Components
     {
         // Internal state exposed to attributes and dialogs
         internal bool _isRunning = false;
+        internal bool _isServerRunning = false;
         internal string _status = "Ready to configure";
         internal LilyPadCfdSettings _settings = new LilyPadCfdSettings();
 
         // NOTE: Task management fields for handling the simulation process.
         private CancellationTokenSource _cancellationTokenSource;
         private LilyPadCfdDialog _activeDialog;
+        private Process _juliaServerProcess = null;
+
+        // Store the current JSON data for pushing to server
+        private string _currentCurvesJson = "{}";
+        private string _customJuliaPath = null;
 
         public LilyPadCfdComponent() : base(
             "LilyPad CFD Analysis",
@@ -78,19 +90,35 @@ namespace LilyPadGH.Components
 
         protected override void SolveInstance(IGH_DataAccess DA)
         {
-            // --- Input Gathering ---
+            // --- Input Gathering with stability checks ---
             Rectangle3d boundary = Rectangle3d.Unset;
             var customCurves = new List<Curve>();
             string customJuliaPath = string.Empty;
 
-            if (!DA.GetData(0, ref boundary)) return;
-            DA.GetDataList(1, customCurves); // Optional input - multiple curves
-            DA.GetData(2, ref customJuliaPath); // Optional input - custom Julia path
+            // Clear any previous error messages
+            ClearRuntimeMessages();
+
+            if (!DA.GetData(0, ref boundary))
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Boundary input is required");
+                return;
+            }
+
+            // Safely get optional inputs
+            try
+            {
+                DA.GetDataList(1, customCurves); // Optional input - multiple curves
+                DA.GetData(2, ref customJuliaPath); // Optional input - custom Julia path
+            }
+            catch (Exception ex)
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, $"Input processing warning: {ex.Message}");
+            }
 
             // Set custom Julia path if provided
             if (!string.IsNullOrEmpty(customJuliaPath))
             {
-                JuliaRunner.SetCustomJuliaPath(customJuliaPath);
+                _customJuliaPath = customJuliaPath;
             }
 
             if (!boundary.IsValid)
@@ -238,70 +266,11 @@ namespace LilyPadGH.Components
                 }
             }
 
-            // --- JULIA INTEGRATION ---
-            string juliaOutput = "Julia script not executed.";
-            try
-            {
-                // Get the path to RunServer.jl in the deployed package
-                string serverScriptPath = JuliaRunner.GetServerScriptPath();
+            // Store the current curves JSON for server pushing
+            _currentCurvesJson = curveJsonString;
 
-                if (File.Exists(serverScriptPath))
-                {
-                    // Create a JSON file with the boundary and curves data for Julia to read
-                    string packageDirectory = Environment.ExpandEnvironmentVariables(@"%appdata%\McNeel\Rhinoceros\packages\8.0\LilyPadGH\0.0.1");
-                    string juliaDataPath = Path.Combine(packageDirectory, "Julia", "input_data.json");
-
-                    // Create combined data for Julia including simulation parameters
-                    var juliaInputData = new
-                    {
-                        simulation_parameters = new
-                        {
-                            reynolds_number = _settings.ReynoldsNumber,
-                            velocity = _settings.Velocity,
-                            grid_resolution_x = _settings.GridResolutionX,
-                            grid_resolution_y = _settings.GridResolutionY,
-                            duration = _settings.Duration
-                        },
-                        boundary = new
-                        {
-                            type = "rectangle",
-                            center = new { x = boundary.Center.X, y = boundary.Center.Y, z = boundary.Center.Z },
-                            width = boundary.Width,
-                            height = boundary.Height,
-                            corner_points = new[]
-                            {
-                                new { x = boundary.Corner(0).X, y = boundary.Corner(0).Y },
-                                new { x = boundary.Corner(1).X, y = boundary.Corner(1).Y },
-                                new { x = boundary.Corner(2).X, y = boundary.Corner(2).Y },
-                                new { x = boundary.Corner(3).X, y = boundary.Corner(3).Y }
-                            }
-                        },
-                        curves = new
-                        {
-                            type = "multiple_closed_polylines",
-                            count = customCurves?.Count ?? 0,
-                            curves_json = curveJsonString
-                        }
-                    };
-
-                    string juliaInputJson = JsonSerializer.Serialize(juliaInputData, new JsonSerializerOptions { WriteIndented = true });
-                    File.WriteAllText(juliaDataPath, juliaInputJson);
-
-                    // Run Julia server with the data file path
-                    string args = $"\"{juliaDataPath}\"";
-                    juliaOutput = JuliaRunner.RunScript(serverScriptPath, args);
-                }
-                else
-                {
-                    juliaOutput = $"Error: RunServer.jl not found at {serverScriptPath}";
-                }
-            }
-            catch (Exception ex)
-            {
-                // Display Julia errors on the component itself.
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Julia Error: {ex.Message}");
-                juliaOutput = $"Execution failed: {ex.Message}";
-            }
+            // --- JULIA INTEGRATION (Manual via server buttons) ---
+            string juliaOutput = _isServerRunning ? "Server is running. Use 'Push Data to Server' button." : "Julia server not started. Use dialog to start server.";
 
             // --- Output Assignment ---
             DA.SetData(0, _status);
@@ -332,12 +301,19 @@ namespace LilyPadGH.Components
             _activeDialog = new LilyPadCfdDialog(_settings);
             _activeDialog.OnRunClicked += HandleRunClicked;
             _activeDialog.OnStopClicked += HandleStopClicked;
+            _activeDialog.OnStartServerClicked += HandleStartServerClicked;
+            _activeDialog.OnStopServerClicked += HandleStopServerClicked;
+            _activeDialog.OnPushDataClicked += HandlePushDataClicked;
 
             _activeDialog.SetRunningState(_isRunning);
+            _activeDialog.SetServerState(_isServerRunning);
 
             _activeDialog.Closed += (s, e) => {
                 _activeDialog.OnRunClicked -= HandleRunClicked;
                 _activeDialog.OnStopClicked -= HandleStopClicked;
+                _activeDialog.OnStartServerClicked -= HandleStartServerClicked;
+                _activeDialog.OnStopServerClicked -= HandleStopServerClicked;
+                _activeDialog.OnPushDataClicked -= HandlePushDataClicked;
                 _activeDialog = null;
             };
 
@@ -363,6 +339,143 @@ namespace LilyPadGH.Components
         private void HandleStopClicked()
         {
             _cancellationTokenSource?.Cancel();
+        }
+
+        private void HandleStartServerClicked()
+        {
+            if (_isServerRunning) return;
+
+            try
+            {
+                string juliaExePath = GetJuliaExecutablePath();
+                string serverScriptPath = GetServerScriptPath();
+
+                if (!File.Exists(juliaExePath))
+                {
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Julia executable not found at {juliaExePath}");
+                    return;
+                }
+
+                if (!File.Exists(serverScriptPath))
+                {
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Server script not found at {serverScriptPath}");
+                    return;
+                }
+
+                var threadCount = Environment.ProcessorCount;
+                _juliaServerProcess = new Process()
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = juliaExePath,
+                        Arguments = $"--threads {threadCount} \"{serverScriptPath}\"",
+                        UseShellExecute = true,
+                        CreateNoWindow = false,
+                        WindowStyle = ProcessWindowStyle.Normal
+                    }
+                };
+
+                _juliaServerProcess.Start();
+                _isServerRunning = true;
+                _activeDialog?.SetServerState(_isServerRunning);
+
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Julia server started successfully");
+                ExpireSolution(true);
+            }
+            catch (Exception ex)
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Failed to start Julia server: {ex.Message}");
+            }
+        }
+
+        private void HandleStopServerClicked()
+        {
+            if (!_isServerRunning || _juliaServerProcess == null) return;
+
+            try
+            {
+                // Send shutdown signal to Julia server
+                using var client = new HttpClient();
+                client.Timeout = TimeSpan.FromSeconds(5);
+                var response = client.GetAsync("http://localhost:8080/shutdown").GetAwaiter().GetResult();
+
+                // Wait a bit for graceful shutdown
+                System.Threading.Thread.Sleep(1000);
+
+                // Force kill if still running
+                if (!_juliaServerProcess.HasExited)
+                {
+                    _juliaServerProcess.Kill();
+                }
+
+                _isServerRunning = false;
+                _juliaServerProcess = null;
+                _activeDialog?.SetServerState(_isServerRunning);
+
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Julia server stopped successfully");
+                ExpireSolution(true);
+            }
+            catch (Exception ex)
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, $"Error stopping server: {ex.Message}");
+
+                // Force kill as fallback
+                if (_juliaServerProcess != null && !_juliaServerProcess.HasExited)
+                {
+                    _juliaServerProcess.Kill();
+                }
+                _isServerRunning = false;
+                _juliaServerProcess = null;
+                _activeDialog?.SetServerState(_isServerRunning);
+                ExpireSolution(true);
+            }
+        }
+
+        private void HandlePushDataClicked()
+        {
+            if (!_isServerRunning)
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Julia server is not running");
+                return;
+            }
+
+            try
+            {
+                // Create the JSON data to send to server
+                var serverData = new
+                {
+                    simulation_parameters = new
+                    {
+                        reynolds_number = _settings.ReynoldsNumber,
+                        velocity = _settings.Velocity,
+                        grid_resolution_x = _settings.GridResolutionX,
+                        grid_resolution_y = _settings.GridResolutionY,
+                        duration = _settings.Duration
+                    },
+                    polylines = JsonSerializer.Deserialize<JsonElement>(_currentCurvesJson).GetProperty("polylines")
+                };
+
+                string jsonData = JsonSerializer.Serialize(serverData, new JsonSerializerOptions { WriteIndented = true });
+
+                using var client = new HttpClient();
+                client.Timeout = TimeSpan.FromSeconds(30);
+                var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
+                var response = client.PostAsync("http://localhost:8080/", content).GetAwaiter().GetResult();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    string responseText = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, $"Data pushed successfully: {responseText}");
+                }
+                else
+                {
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Server returned error: {response.StatusCode}");
+                }
+            }
+            catch (Exception ex)
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Failed to push data to server: {ex.Message}");
+            }
         }
 
         private async Task RunSimulationAsync(CancellationToken token)
@@ -411,6 +524,83 @@ namespace LilyPadGH.Components
                 _activeDialog?.SetRunningState(isRunning);
                 ExpireSolution(true);
             });
+        }
+
+        // ========================================
+        // JULIA PATH DETECTION METHODS
+        // ========================================
+
+        private string GetJuliaExecutablePath()
+        {
+            // First, check if a custom path has been set
+            if (!string.IsNullOrEmpty(_customJuliaPath))
+            {
+                string juliaPath = Path.Combine(_customJuliaPath, "bin", "julia.exe");
+                if (File.Exists(juliaPath))
+                {
+                    return juliaPath;
+                }
+            }
+
+            // Second, check the user's AppData\Local\Programs for Julia installation
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string[] possibleJuliaVersions = { "Julia-1.11.7", "Julia-1.11.6", "Julia-1.11.5", "Julia-1.11", "Julia-1.10" };
+
+            foreach (var version in possibleJuliaVersions)
+            {
+                // Check the exact structure: AppData\Local\Programs\Julia-1.11.7\bin\julia.exe
+                string juliaPath = Path.Combine(localAppData, "Programs", version, "bin", "julia.exe");
+                if (File.Exists(juliaPath))
+                {
+                    return juliaPath;
+                }
+            }
+
+            // Third, check the bundled Julia in the plugin directory
+            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string bundledJulia = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "bin", "julia.exe");
+
+            if (File.Exists(bundledJulia))
+            {
+                return bundledJulia;
+            }
+
+            // If we get here, no Julia installation was found
+            string expectedPath = Path.Combine(localAppData, "Programs", "Julia-1.11.7", "bin", "julia.exe");
+            throw new FileNotFoundException(
+                $"julia.exe not found. Please ensure Julia is installed at:\n" +
+                $"- {expectedPath}\n" +
+                $"Or provide a custom path via the Julia Path input.",
+                expectedPath);
+        }
+
+        private string GetServerScriptPath()
+        {
+            // Check in the deployed package folder first
+            string packageDirectory = Environment.ExpandEnvironmentVariables(@"%appdata%\McNeel\Rhinoceros\packages\8.0\LilyPadGH\0.0.1");
+            string scriptPath = Path.Combine(packageDirectory, "Julia", "RunServer.jl");
+
+            if (File.Exists(scriptPath))
+            {
+                return scriptPath;
+            }
+
+            // Fallback to the gha directory (for development/debugging)
+            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            scriptPath = Path.Combine(ghaDirectory, "Julia", "RunServer.jl");
+
+            if (!File.Exists(scriptPath))
+            {
+                string packagePath = Path.Combine(packageDirectory, "Julia", "RunServer.jl");
+                throw new FileNotFoundException(
+                    $"RunServer.jl not found. Expected at:\n" +
+                    $"- Package folder: {packagePath}\n" +
+                    $"- Fallback folder: {scriptPath}\n" +
+                    $"Ensure the Julia scripts are deployed to the package folder.",
+                    scriptPath);
+            }
+
+            return scriptPath;
         }
 
         // ========================================
