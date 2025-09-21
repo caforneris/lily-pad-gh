@@ -114,9 +114,12 @@
     <StartWorkingDirectory>$(ProjectDir)</StartWorkingDirectory>
   </PropertyGroup>
 
-	<!-- Julia Package -->
+	<!-- Julia Scripts -->
 	<ItemGroup>
-		<Content Include="JuliaPackage\julia-1.11.7-win64\**">
+		<Content Include="Julia\RunServer.jl">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+		<Content Include="Julia\2d.jl">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 	</ItemGroup>
