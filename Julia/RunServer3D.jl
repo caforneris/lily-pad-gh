@@ -3,10 +3,10 @@
 # DESC: A persistent HTTP server that runs a headless WaterLily.jl simulation
 #       and optionally generates an MP4 animation of the results.
 # --- REVISIONS ---
-# - 2025-09-21 @ 10:58: Fixed blank animation output.
-#   - Added explicit camera controls to correctly frame the 3D scene.
-#   - Added automatic color range calculation to make the simulation visible.
-#   - Refactored animation loop to use Makie.Observables for correctness and performance.
+# - 2025-09-21 @ 11:23: Fixed UndefVarError(:isosurface, Makie).
+#   - The isosurface function comes from GeometryBasics, not Makie.
+#     Removed incorrect "Makie." prefix from the function call.
+# - 2025-09-21 @ 11:12: Switched to mesh! for plotting solid obstacles.
 # ========================================
 
 using HTTP
@@ -16,6 +16,7 @@ using CairoMakie
 using Base64
 using Statistics
 using Interpolations
+using GeometryBasics
 
 # --- Global Server State ---
 const SERVER = Ref{HTTP.Server}()
@@ -61,24 +62,24 @@ function run_simulation_from_json(json_data)
             println("🎬 Starting animation recording to: ", anim_path)
             
             # --- Set up the Makie Scene ---
-            fig = Figure(size=(800, 800))
+            fig = Figure(size=(800, 800), backgroundcolor = :black)
             ax = LScene(fig[1,1], show_axis=false)
+            
+            solid_mask_numeric = Float32.(mask)
+            # NOTE: Corrected. The isosurface function comes from GeometryBasics.
+            vertices, faces = isosurface(solid_mask_numeric, 0.5)
+            mesh!(ax, vertices, faces; color=(:white, 0.3), shading=false)
 
-            # NOTE: Use an Observable to hold the vorticity data.
-            # This allows Makie to automatically update the plot when the data changes.
             vorticity_data = sim.flow.σ
             vorticity_obs = Observable(vorticity_data[inside(vorticity_data)])
 
-            # NOTE: Run a few steps to get initial data for setting the color range.
             sim_step!(sim, 0.5)
             @inside vorticity_data[I] = WaterLily.ω_mag(I, sim.flow.u)
             max_vort = maximum(vorticity_data)
-            vorticity_obs[] = vorticity_data[inside(vorticity_data)] # Update observable
+            vorticity_obs[] = vorticity_data[inside(vorticity_data)]
             
-            # NOTE: Create the volume plot once with the color range and bind it to the observable.
-            volume!(ax, vorticity_obs, algorithm=:mip, colormap=:algae, colorrange=(0, max_vort * 0.75))
+            volume!(ax, vorticity_obs, algorithm=:mip, colormap=:viridis, colorrange=(0, max_vort * 0.75))
             
-            # NOTE: Set the camera position to get a good view of the simulation.
             cam_pos = Vec3f(nx*1.5, ny*1.5, nz*1.5)
             look_at = Vec3f(nx/2, ny/2, nz/2)
             update_cam!(ax.scene, cam_pos, look_at)
@@ -87,7 +88,7 @@ function run_simulation_from_json(json_data)
             record(fig, anim_path, 0:frame_duration:duration; framerate=framerate) do t
                 sim_step!(sim, frame_duration)
                 @inside vorticity_data[I] = WaterLily.ω_mag(I, sim.flow.u)
-                vorticity_obs[] = vorticity_data[inside(vorticity_data)] # This single line updates the plot!
+                vorticity_obs[] = vorticity_data[inside(vorticity_data)]
             end
 
             println("✅ Animation saved.")

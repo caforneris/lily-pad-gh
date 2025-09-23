@@ -1,10 +1,12 @@
 ﻿// ========================================
 // FILE: LilyPad_Settings.cs
-// PART 2: SETTINGS DATA MODEL
-// DESC: Holds all configuration values for the CFD analysis. This decouples
-//       the component's state from its execution logic and UI.
-//       Updated to include
-//       all simulation parameters from the Eto dialog.
+// PART 2: SETTINGS DATA MODEL WITH UI FRAME PATH
+// DESC: Holds all configuration values for the CFD analysis including real-time UI display.
+//       Added UI frame path for communication between dialog and Julia server.
+// --- REVISIONS ---
+// - 2025-09-22: Added UIFramePath property for real-time display integration.
+//   - Property allows dialog to specify where Julia should write live frames.
+//   - Maintains backward compatibility with existing settings structure.
 // ========================================
 
 namespace LilyPadGH.Components
@@ -33,10 +35,12 @@ namespace LilyPadGH.Components
         public double SimplifyTolerance { get; set; } = 0.0; // Douglas-Peucker tolerance (0 = no simplification)
         public int MaxPointsPerPoly { get; set; } = 1000; // Maximum points per polyline (very high = no reduction)
 
+        // Real-time UI display integration
+        public string UIFramePath { get; set; } = string.Empty; // Path where Julia writes live frames for UI display
 
         // NOTE: Simple memberwise clone is sufficient for a deep copy here as the class only
-        // contains value types. This prevents the dialog from modifying the component's state
-        // directly until the user commits the changes.
+        // contains value types and strings. This prevents the dialog from modifying the component's 
+        // state directly until the user commits the changes.
         public LilyPadCfdSettings Clone()
         {
             return (LilyPadCfdSettings)this.MemberwiseClone();

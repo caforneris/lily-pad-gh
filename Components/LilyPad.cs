@@ -12,6 +12,15 @@
 // - 2025-09-21: Integrated server control into main component.
 //   - Removed dependency on separate JuliaRunner class.
 //   - Added server start/stop and data push buttons to ETO dialog.
+// - 2025-09-22: Bundled Julia package for distribution.
+//   - Removed Julia Path input parameter (eliminated user path dependency).
+//   - Updated path detection to prioritise bundled Julia in package directory.
+//   - Simplified path detection logic for team GitHub workflow.
+//   - Julia now deploys to %APPDATA%\McNeel\Rhinoceros\packages\8.0\LilyPadGH\0.0.1\Julia.
+// - 2025-09-22: Updated for simplified UI with ImageView and UITimer.
+//   - Integrated with new dialog structure using temp file approach.
+//   - Simplified event handling to match new dialog events.
+//   - Removed complex real-time display component in favor of simple approach.
 // ========================================
 
 using Grasshopper.Kernel;
@@ -49,12 +58,11 @@ namespace LilyPadGH.Components
 
         // Store the current JSON data for pushing to server
         private string _currentCurvesJson = "{}";
-        private string _customJuliaPath = null;
 
         public LilyPadCfdComponent() : base(
             "LilyPad CFD Analysis",
             "LilyPad",
-            "Simulates 2D flow and generates WaterLily-compatible parameters.",
+            "Simulates 2D flow and generates WaterLily-compatible parameters with real-time display.",
             "LilyPadGH",
             "Flow Simulation")
         {
@@ -63,11 +71,10 @@ namespace LilyPadGH.Components
         protected override void RegisterInputParams(GH_InputParamManager pManager)
         {
             // NOTE: Core geometric inputs. All simulation parameters are handled via the Eto dialog.
+            //       Julia is now bundled - no path input required.
             pManager.AddRectangleParameter("Boundary Plane", "B", "Boundary plane as rectangle (x,y dimensions)", GH_ParamAccess.item);
             pManager.AddCurveParameter("Custom Curves", "Crvs", "Optional custom curves to be discretized (multiple closed polylines)", GH_ParamAccess.list);
-            pManager.AddTextParameter("Julia Path", "JP", "Optional custom Julia installation path (e.g., C:\\Users\\YourName\\AppData\\Local\\Programs\\Julia-1.11.7)", GH_ParamAccess.item);
             pManager[1].Optional = true; // Mark Custom Curves as optional
-            pManager[2].Optional = true; // Mark Julia Path as optional
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
@@ -93,7 +100,6 @@ namespace LilyPadGH.Components
             // --- Input Gathering with stability checks ---
             Rectangle3d boundary = Rectangle3d.Unset;
             var customCurves = new List<Curve>();
-            string customJuliaPath = string.Empty;
 
             // Clear any previous error messages
             ClearRuntimeMessages();
@@ -108,17 +114,10 @@ namespace LilyPadGH.Components
             try
             {
                 DA.GetDataList(1, customCurves); // Optional input - multiple curves
-                DA.GetData(2, ref customJuliaPath); // Optional input - custom Julia path
             }
             catch (Exception ex)
             {
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, $"Input processing warning: {ex.Message}");
-            }
-
-            // Set custom Julia path if provided
-            if (!string.IsNullOrEmpty(customJuliaPath))
-            {
-                _customJuliaPath = customJuliaPath;
             }
 
             if (!boundary.IsValid)
@@ -246,7 +245,8 @@ namespace LilyPadGH.Components
                         bool isClosed = curve.IsClosed;
 
                         // Use original simple structure
-                        polylinesList.Add(new {
+                        polylinesList.Add(new
+                        {
                             type = "closed_polyline",
                             is_closed = isClosed,
                             divisions = _settings.CurveDivisions,
@@ -257,7 +257,8 @@ namespace LilyPadGH.Components
 
                 if (polylinesList.Count > 0)
                 {
-                    var curvesJson = new {
+                    var curvesJson = new
+                    {
                         type = "multiple_closed_polylines",
                         count = polylinesList.Count,
                         polylines = polylinesList
@@ -270,7 +271,9 @@ namespace LilyPadGH.Components
             _currentCurvesJson = curveJsonString;
 
             // --- JULIA INTEGRATION (Manual via server buttons) ---
-            string juliaOutput = _isServerRunning ? "Server is running. Use 'Push Data to Server' button." : "Julia server not started. Use dialog to start server.";
+            string juliaOutput = _isServerRunning ? 
+                (_isRunning ? "Simulation running with real-time display..." : "Server ready - Real-time display active") : 
+                "Julia server not started. Use dialog to start server.";
 
             // --- Output Assignment ---
             DA.SetData(0, _status);
@@ -282,12 +285,11 @@ namespace LilyPadGH.Components
             DA.SetData(6, juliaOutput); // Set the new Julia output
 
             // Update component message on canvas
-            Message = _isRunning ? "Running..." : (_isServerRunning ? "Ready" : "Configured");
+            Message = _isRunning ? "Recording..." : (_isServerRunning ? "Live" : "Configured");
         }
 
-
         // ========================================
-        // ASYNC & UI HANDLING
+        // ASYNC & UI HANDLING - SIMPLIFIED FOR NEW DIALOG
         // ========================================
 
         public void ShowConfigDialog()
@@ -299,46 +301,25 @@ namespace LilyPadGH.Components
             }
 
             _activeDialog = new LilyPadCfdDialog(_settings);
-            _activeDialog.OnRunClicked += HandleRunClicked;
-            _activeDialog.OnStopClicked += HandleStopClicked;
+            
+            // Wire up events to match new dialog structure
             _activeDialog.OnStartServerClicked += HandleStartServerClicked;
             _activeDialog.OnStopServerClicked += HandleStopServerClicked;
-            _activeDialog.OnApplyParametersClicked += HandleApplyParametersClicked;
+            _activeDialog.OnApplyAndRunClicked += HandleApplyAndRunClicked;
 
-            _activeDialog.SetRunningState(_isRunning);
             _activeDialog.SetServerState(_isServerRunning);
 
             _activeDialog.Closed += (s, e) => {
-                _activeDialog.OnRunClicked -= HandleRunClicked;
-                _activeDialog.OnStopClicked -= HandleStopClicked;
+                // Clean up event handlers
                 _activeDialog.OnStartServerClicked -= HandleStartServerClicked;
                 _activeDialog.OnStopServerClicked -= HandleStopServerClicked;
-                _activeDialog.OnApplyParametersClicked -= HandleApplyParametersClicked;
+                _activeDialog.OnApplyAndRunClicked -= HandleApplyAndRunClicked;
                 _activeDialog = null;
             };
 
             // NOTE: For Eto, set the Owner property first, then call Show() with no arguments.
             _activeDialog.Owner = RhinoEtoApp.MainWindow;
             _activeDialog.Show();
-        }
-
-        private void HandleRunClicked(LilyPadCfdSettings newSettings)
-        {
-            if (_isRunning) return;
-
-            _settings = newSettings;
-            _cancellationTokenSource = new CancellationTokenSource();
-
-            // NOTE: Fire-and-forget async task. UI remains responsive.
-            Task.Run(() => RunSimulationAsync(_cancellationTokenSource.Token));
-
-            // Immediately re-calculate the component's outputs with the new settings
-            ExpireSolution(true);
-        }
-
-        private void HandleStopClicked()
-        {
-            _cancellationTokenSource?.Cancel();
         }
 
         private void HandleStartServerClicked()
@@ -380,7 +361,7 @@ namespace LilyPadGH.Components
                 _activeDialog?.SetServerState(_isServerRunning);
 
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Julia server started successfully");
-                Message = "Server Ready";
+                Message = "Live";
                 ExpireSolution(true);
             }
             catch (Exception ex)
@@ -395,6 +376,13 @@ namespace LilyPadGH.Components
 
             try
             {
+                // Stop any running simulation first
+                if (_isRunning)
+                {
+                    _cancellationTokenSource?.Cancel();
+                    _isRunning = false;
+                }
+
                 // Send shutdown signal to Julia server
                 using var client = new HttpClient();
                 client.Timeout = TimeSpan.FromSeconds(5);
@@ -433,7 +421,7 @@ namespace LilyPadGH.Components
             }
         }
 
-        private void HandleApplyParametersClicked(LilyPadCfdSettings newSettings)
+        private void HandleApplyAndRunClicked(LilyPadCfdSettings newSettings)
         {
             if (!_isServerRunning)
             {
@@ -441,11 +429,11 @@ namespace LilyPadGH.Components
                 return;
             }
 
-            // Update settings and expire solution to regenerate geometry with new parameters
+            // Update settings and start simulation with recording
             _settings = newSettings;
             ExpireSolution(true);
 
-            // Wait a moment for the solution to update, then push to server
+            // Start simulation with recording
             Task.Run(async () =>
             {
                 await Task.Delay(500); // Give time for geometry to update
@@ -474,7 +462,8 @@ namespace LilyPadGH.Components
                             simplify_tolerance = _settings.SimplifyTolerance,
                             max_points_per_poly = _settings.MaxPointsPerPoly
                         },
-                        polylines = JsonSerializer.Deserialize<JsonElement>(_currentCurvesJson).GetProperty("polylines")
+                        polylines = JsonSerializer.Deserialize<JsonElement>(_currentCurvesJson).GetProperty("polylines"),
+                        enable_temp_file_output = true // Signal to write frames to temp file
                     };
 
                     string jsonData = JsonSerializer.Serialize(serverData, new JsonSerializerOptions { WriteIndented = true });
@@ -489,10 +478,10 @@ namespace LilyPadGH.Components
                         if (response.IsSuccessStatusCode)
                         {
                             string responseText = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-                            AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, $"Parameters applied and simulation started: {responseText}");
+                            AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, $"Simulation started: {responseText}");
 
-                            // Change component button color to indicate successful run
-                            Message = "Running Simulation...";
+                            _isRunning = true;
+                            Message = "Recording...";
                             ExpireSolution(true);
                         }
                         else
@@ -505,45 +494,10 @@ namespace LilyPadGH.Components
                 {
                     RhinoApp.InvokeOnUiThread(() =>
                     {
-                        AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Failed to apply parameters: {ex.Message}");
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Failed to start simulation: {ex.Message}");
                     });
                 }
             });
-        }
-
-        private async Task RunSimulationAsync(CancellationToken token)
-        {
-            try
-            {
-                _isRunning = true;
-                UpdateComponentState("Simulation starting...", true);
-
-                int steps = (int)(_settings.Duration / 0.1); // Assuming 10 steps per second of duration
-                for (int i = 0; i <= steps; i++)
-                {
-                    token.ThrowIfCancellationRequested();
-                    await Task.Delay(100, token); // 100ms delay simulates one step
-                    double progress = (double)i / steps;
-                    UpdateComponentState($"Running... {progress:P0}", true);
-                }
-
-                UpdateComponentState("Simulation completed.", false);
-            }
-            catch (OperationCanceledException)
-            {
-                UpdateComponentState("Simulation stopped by user.", false);
-            }
-            catch (Exception ex)
-            {
-                UpdateComponentState($"Error: {ex.Message}", false);
-            }
-            finally
-            {
-                _cancellationTokenSource?.Dispose();
-                _cancellationTokenSource = null;
-                _isRunning = false;
-                UpdateComponentState("Ready to configure", false); // Final UI state refresh
-            }
         }
 
         // NOTE: Helper to update component state and trigger a redraw from any thread.
@@ -554,34 +508,43 @@ namespace LilyPadGH.Components
 
             RhinoApp.InvokeOnUiThread(() =>
             {
-                _activeDialog?.SetRunningState(isRunning);
                 ExpireSolution(true);
             });
         }
 
         // ========================================
-        // JULIA PATH DETECTION METHODS
+        // JULIA PATH DETECTION METHODS (UNCHANGED)
         // ========================================
 
         private string GetJuliaExecutablePath()
         {
-            // First, check if a custom path has been set
-            if (!string.IsNullOrEmpty(_customJuliaPath))
+            // NOTE: Bundled Julia path detection - prioritises package deployment location.
+            //       Eliminates user-specific path dependencies for team GitHub workflow.
+
+            // First priority: Check the bundled Julia in the package directory
+            string packageDirectory = Environment.ExpandEnvironmentVariables(@"%appdata%\McNeel\Rhinoceros\packages\8.0\LilyPadGH\0.0.1");
+            string bundledJulia = Path.Combine(packageDirectory, "Julia", "julia-1.11.7-win64", "bin", "julia.exe");
+
+            if (File.Exists(bundledJulia))
             {
-                string juliaPath = Path.Combine(_customJuliaPath, "bin", "julia.exe");
-                if (File.Exists(juliaPath))
-                {
-                    return juliaPath;
-                }
+                return bundledJulia;
             }
 
-            // Second, check the user's AppData\Local\Programs for Julia installation
+            // Second priority: Check fallback in GHA directory (development/debugging)
+            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string devJulia = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "bin", "julia.exe");
+
+            if (File.Exists(devJulia))
+            {
+                return devJulia;
+            }
+
+            // Third priority: Check user's system Julia installation (backwards compatibility)
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string[] possibleJuliaVersions = { "Julia-1.11.7", "Julia-1.11.6", "Julia-1.11.5", "Julia-1.11", "Julia-1.10" };
 
             foreach (var version in possibleJuliaVersions)
             {
-                // Check the exact structure: AppData\Local\Programs\Julia-1.11.7\bin\julia.exe
                 string juliaPath = Path.Combine(localAppData, "Programs", version, "bin", "julia.exe");
                 if (File.Exists(juliaPath))
                 {
@@ -589,22 +552,13 @@ namespace LilyPadGH.Components
                 }
             }
 
-            // Third, check the bundled Julia in the plugin directory
-            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-            string bundledJulia = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "bin", "julia.exe");
-
-            if (File.Exists(bundledJulia))
-            {
-                return bundledJulia;
-            }
-
-            // If we get here, no Julia installation was found
-            string expectedPath = Path.Combine(localAppData, "Programs", "Julia-1.11.7", "bin", "julia.exe");
+            // If we get here, no Julia installation was found - provide helpful error
             throw new FileNotFoundException(
-                $"julia.exe not found. Please ensure Julia is installed at:\n" +
-                $"- {expectedPath}\n" +
-                $"Or provide a custom path via the Julia Path input.",
-                expectedPath);
+                $"Julia executable not found. Expected bundled Julia at:\n" +
+                $"- Package location: {bundledJulia}\n" +
+                $"- Development location: {devJulia}\n" +
+                $"Ensure the Julia package is properly deployed with the component.",
+                bundledJulia);
         }
 
         private string GetServerScriptPath()

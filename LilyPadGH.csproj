@@ -1,134 +1,105 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
-    <Version>0.0.1</Version>
-    <LangVersion>12.0</LangVersion>
-    <UseWindowsForms>true</UseWindowsForms>
-    <Title>LilyPadGH</Title>
-    <Description>LilyPadGH - Fluid dynamics simulation for Grasshopper</Description>
-    <TargetExt>.gha</TargetExt>
-    <OutputType>Library</OutputType>
-    <AutoGenerateBindingRedirects>False</AutoGenerateBindingRedirects>
-    <StartupObject />
-    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
-    <Configurations>Debug;Release;Deploy Rhino 8;Deploy Rhino 7;VS Debug;VS Release</Configurations>
-    <Platforms>AnyCPU</Platforms>
-    <!-- Visual Studio Professional compatibility -->
-    <PlatformTarget>AnyCPU</PlatformTarget>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
-  
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <DebugType>none</DebugType>
-    <Optimize>False</Optimize>
-  </PropertyGroup>
-  
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Deploy Rhino 8|AnyCPU'">
-    <DebugType>none</DebugType>
-    <Optimize>False</Optimize>
-  </PropertyGroup>
-  
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Deploy Rhino 7|AnyCPU'">
-    <DebugType>none</DebugType>
-    <Optimize>False</Optimize>
-  </PropertyGroup>
-  
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <DebugType>none</DebugType>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFramework>net8.0-windows</TargetFramework>
+		<Version>0.0.1</Version>
+		<LangVersion>12.0</LangVersion>
+		<UseWindowsForms>true</UseWindowsForms>
+		<Title>LilyPadGH</Title>
+		<Description>LilyPadGH - Fluid dynamics simulation for Grasshopper</Description>
+		<TargetExt>.gha</TargetExt>
+		<OutputType>Library</OutputType>
+		<AutoGenerateBindingRedirects>False</AutoGenerateBindingRedirects>
+		<StartupObject />
+		<GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
+		<Configurations>Debug;Release;Deploy Rhino 8;Deploy Rhino 7;VS Debug;VS Release</Configurations>
+		<Platforms>AnyCPU</Platforms>
+		<!-- Visual Studio Professional compatibility -->
+		<PlatformTarget>AnyCPU</PlatformTarget>
+		<ErrorReport>prompt</ErrorReport>
+		<WarningLevel>4</WarningLevel>
+	</PropertyGroup>
 
-  <!-- Visual Studio Professional specific configurations -->
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='VS Debug|AnyCPU'">
-    <DebugType>full</DebugType>
-    <Optimize>False</Optimize>
-    <DefineConstants>DEBUG;TRACE</DefineConstants>
-    <OutputPath>bin\VS Debug\</OutputPath>
-    <DocumentationFile>bin\VS Debug\LilyPadGH.xml</DocumentationFile>
-  </PropertyGroup>
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+		<DebugType>none</DebugType>
+		<Optimize>False</Optimize>
+	</PropertyGroup>
 
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='VS Release|AnyCPU'">
-    <DebugType>pdbonly</DebugType>
-    <Optimize>True</Optimize>
-    <DefineConstants>TRACE</DefineConstants>
-    <OutputPath>bin\VS Release\</OutputPath>
-    <DocumentationFile>bin\VS Release\LilyPadGH.xml</DocumentationFile>
-  </PropertyGroup>
-  
-  <PropertyGroup>
-    <!-- Default to copying for both Rhino 7 and Rhino 8 if not set -->
-    <RhinoVersion Condition="'$(RhinoVersion)'==''">Both</RhinoVersion>
-    <!-- Define deployment paths as properties -->
-    <Rhino8Path>%appdata%\McNeel\Rhinoceros\packages\8.0\LilyPadGH\0.0.1</Rhino8Path>
-    <Rhino7Path>%appdata%\McNeel\Rhinoceros\packages\7.0\LilyPadGH\0.0.1</Rhino7Path>
-  </PropertyGroup>
-  
-  <ItemGroup>
-    <Compile Remove="Components\PostJson.cs" />
-    <Compile Remove="Components\StartStopJulia.cs" />
-  </ItemGroup>
-  
-  <ItemGroup>
-    <None Remove="Icons\CFDAnalysisIcon.png" />
-    <None Remove="Julia\Manifest.toml" />
-    <None Remove="Julia\Project.toml" />
-    <None Remove="Julia\RunServer3D.jl" />
-  </ItemGroup>
-  
-  <ItemGroup>
-    <EmbeddedResource Include="Icons\CFDAnalysisIcon.png" />
-  </ItemGroup>
-  
-  <!-- Package references -->
-  <ItemGroup>
-    <PackageReference Include="Grasshopper" Version="8.1.23325.13001" />
-    <PackageReference Include="RhinoCommon" Version="8.1.23325.13001" />
-    <PackageReference Include="System.Text.Json" Version="8.0.5" />
-    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
-  </ItemGroup>
-  <ItemGroup>
-    <Folder Include="JuliaPackage\" />
-  </ItemGroup>
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Deploy Rhino 8|AnyCPU'">
+		<DebugType>none</DebugType>
+		<Optimize>False</Optimize>
+	</PropertyGroup>
 
-  <!-- Post-build deployment - Compatible with VS Code and Visual Studio Professional -->
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <!-- Single deployment script that handles all configurations -->
-    <Exec Command="call &quot;$(ProjectDir)Deployment\deploy.bat&quot; &quot;$(TargetDir)&quot; &quot;$(ProjectDir)&quot; &quot;$(Configuration)&quot; &quot;$(RhinoVersion)&quot;" />
-  </Target>
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Deploy Rhino 7|AnyCPU'">
+		<DebugType>none</DebugType>
+		<Optimize>False</Optimize>
+	</PropertyGroup>
 
-  <!-- Visual Studio Professional specific targets -->
-  <Target Name="VSDebugBuild" Condition="'$(Configuration)'=='VS Debug'">
-    <Message Text="Building LilyPadGH in Visual Studio Debug mode..." Importance="high" />
-    <Message Text="Output Directory: $(OutputPath)" Importance="high" />
-  </Target>
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+		<DebugType>none</DebugType>
+	</PropertyGroup>
 
-  <Target Name="VSReleaseBuild" Condition="'$(Configuration)'=='VS Release'">
-    <Message Text="Building LilyPadGH in Visual Studio Release mode..." Importance="high" />
-    <Message Text="Output Directory: $(OutputPath)" Importance="high" />
-  </Target>
+	<!-- Visual Studio Professional specific configurations -->
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='VS Debug|AnyCPU'">
+		<DebugType>full</DebugType>
+		<Optimize>False</Optimize>
+		<DefineConstants>DEBUG;TRACE</DefineConstants>
+		<OutputPath>bin\VS Debug\</OutputPath>
+		<DocumentationFile>bin\VS Debug\LilyPadGH.xml</DocumentationFile>
+	</PropertyGroup>
 
-  <!-- Clean target for Visual Studio configurations -->
-  <Target Name="VSClean" BeforeTargets="Clean" Condition="'$(Configuration)'=='VS Debug' Or '$(Configuration)'=='VS Release'">
-    <Message Text="Cleaning Visual Studio build artifacts..." Importance="high" />
-    <RemoveDir Directories="$(OutputPath)" />
-  </Target>
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='VS Release|AnyCPU'">
+		<DebugType>pdbonly</DebugType>
+		<Optimize>True</Optimize>
+		<DefineConstants>TRACE</DefineConstants>
+		<OutputPath>bin\VS Release\</OutputPath>
+		<DocumentationFile>bin\VS Release\LilyPadGH.xml</DocumentationFile>
+	</PropertyGroup>
 
-  <!-- IDE Integration -->
-  <PropertyGroup>
-    <!-- Visual Studio startup project settings -->
-    <StartAction>Program</StartAction>
-    <StartProgram>$(ProgramFiles)\Rhino 8\System\Rhino.exe</StartProgram>
-    <StartArguments>/nosplash</StartArguments>
-    <StartWorkingDirectory>$(ProjectDir)</StartWorkingDirectory>
-  </PropertyGroup>
+	<PropertyGroup>
+		<!-- Default to copying for both Rhino 7 and Rhino 8 if not set -->
+		<RhinoVersion Condition="'$(RhinoVersion)'==''">Both</RhinoVersion>
+		<!-- Define deployment paths as properties -->
+		<Rhino8Path>%appdata%\McNeel\Rhinoceros\packages\8.0\LilyPadGH\0.0.1</Rhino8Path>
+		<Rhino7Path>%appdata%\McNeel\Rhinoceros\packages\7.0\LilyPadGH\0.0.1</Rhino7Path>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<None Remove="Icons\CFDAnalysisIcon.png" />
+		<None Remove="Icons\CFDAnalysisIcon3D.png" />
+		<None Remove="Julia\Manifest.toml" />
+		<None Remove="Julia\Project.toml" />
+		<None Remove="Julia\RunServer3D.jl" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<EmbeddedResource Include="Icons\CFDAnalysisIcon.png" />
+		<EmbeddedResource Include="Icons\CFDAnalysisIcon3D.png" />
+	</ItemGroup>
+
+	<!-- Package references -->
+	<ItemGroup>
+		<PackageReference Include="Grasshopper" Version="8.1.23325.13001" />
+		<PackageReference Include="RhinoCommon" Version="8.1.23325.13001" />
+		<PackageReference Include="System.Text.Json" Version="8.0.5" />
+		<PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+	</ItemGroup>
+
+	<!-- PART 1: Julia Package Content for Bundled Distribution -->
+	<!-- Includes Julia runtime files whilst preserving directory structure for team deployment -->
+	<ItemGroup>
+		<Content Include="JuliaPackage\**\*.*">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<Link>JuliaPackage\%(RecursiveDir)%(Filename)%(Extension)</Link>
+		</Content>
+	</ItemGroup>
 
 	<!-- Julia Scripts -->
 	<ItemGroup>
 		<Content Include="Julia\Manifest.toml">
-		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 		<Content Include="Julia\Project.toml">
-		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 		<Content Include="Julia\RunServer.jl">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -137,13 +108,46 @@
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 		<Content Include="Julia\RunServer3D.jl">
-		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
 	</ItemGroup>
+
 	<ItemGroup>
-	  <None Include="Components\PostJson.cs" />
-	  <None Include="Components\StartStopJulia.cs" />
+		<Folder Include="Julia\src\" />
 	</ItemGroup>
-	
+
+	<!-- Post-build deployment - Compatible with VS Code and Visual Studio Professional -->
+	<!-- PART 2: Integration with Existing Multi-Script Deployment System -->
+	<!-- Maintains compatibility with existing deployment architecture whilst adding Julia package support -->
+	<Target Name="PostBuild" AfterTargets="PostBuildEvent">
+		<!-- Single deployment script that handles all configurations including Julia package -->
+		<Exec Command="call &quot;$(ProjectDir)Deployment\deploy.bat&quot; &quot;$(TargetDir)&quot; &quot;$(ProjectDir)&quot; &quot;$(Configuration)&quot; &quot;$(RhinoVersion)&quot;" />
+	</Target>
+
+	<!-- Visual Studio Professional specific targets -->
+	<Target Name="VSDebugBuild" Condition="'$(Configuration)'=='VS Debug'">
+		<Message Text="Building LilyPadGH in Visual Studio Debug mode..." Importance="high" />
+		<Message Text="Output Directory: $(OutputPath)" Importance="high" />
+	</Target>
+
+	<Target Name="VSReleaseBuild" Condition="'$(Configuration)'=='VS Release'">
+		<Message Text="Building LilyPadGH in Visual Studio Release mode..." Importance="high" />
+		<Message Text="Output Directory: $(OutputPath)" Importance="high" />
+	</Target>
+
+	<!-- Clean target for Visual Studio configurations -->
+	<Target Name="VSClean" BeforeTargets="Clean" Condition="'$(Configuration)'=='VS Debug' Or '$(Configuration)'=='VS Release'">
+		<Message Text="Cleaning Visual Studio build artifacts..." Importance="high" />
+		<RemoveDir Directories="$(OutputPath)" />
+	</Target>
+
+	<!-- IDE Integration -->
+	<PropertyGroup>
+		<!-- Visual Studio startup project settings -->
+		<StartAction>Program</StartAction>
+		<StartProgram>$(ProgramFiles)\Rhino 8\System\Rhino.exe</StartProgram>
+		<StartArguments>/nosplash</StartArguments>
+		<StartWorkingDirectory>$(ProjectDir)</StartWorkingDirectory>
+	</PropertyGroup>
 
 </Project>
