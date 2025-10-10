@@ -20,7 +20,11 @@
 // - 2025-09-22: Updated for simplified UI with ImageView and UITimer.
 //   - Integrated with new dialog structure using temp file approach.
 //   - Simplified event handling to match new dialog events.
-//   - Removed complex real-time display component in favor of simple approach.
+//   - Removed complex real-time display component in favour of simple approach.
+// - 2025-10-10: Added GIF display integration.
+//   - Updated to pass UI GIF path to Julia for in-dialog display.
+//   - GIF now displays in simulation view instead of external viewer.
+//   - Enhanced UI integration for better user experience.
 // ========================================
 
 using Grasshopper.Kernel;
@@ -29,15 +33,15 @@ using Rhino.Geometry;
 using Rhino.UI;
 using System;
 using System.Collections.Generic;
-using System.IO; // NOTE: Added for Path.Combine
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Diagnostics;
-
 // Resolve namespace conflicts - Grasshopper uses System.Drawing
 using GH_Bitmap = System.Drawing.Bitmap;
 
@@ -45,19 +49,31 @@ namespace LilyPadGH.Components
 {
     public class LilyPadCfdComponent : GH_Component
     {
+        // =======================
+        // Part 1 — Internal State
+        // =======================
+        #region Internal State
+
         // Internal state exposed to attributes and dialogs
         internal bool _isRunning = false;
         internal bool _isServerRunning = false;
         internal string _status = "Ready to configure";
         internal LilyPadCfdSettings _settings = new LilyPadCfdSettings();
+        internal string _latestAnimationPath = ""; // Path to most recent GIF animation
 
-        // NOTE: Task management fields for handling the simulation process.
-        private CancellationTokenSource _cancellationTokenSource;
+        // Task management fields for handling the simulation process
         private LilyPadCfdDialog _activeDialog;
         private Process _juliaServerProcess = null;
 
         // Store the current JSON data for pushing to server
         private string _currentCurvesJson = "{}";
+
+        #endregion
+
+        // ==========================
+        // Part 2 — Constructor
+        // ==========================
+        #region Constructor
 
         public LilyPadCfdComponent() : base(
             "LilyPad CFD Analysis",
@@ -68,12 +84,19 @@ namespace LilyPadGH.Components
         {
         }
 
+        #endregion
+
+        // ================================
+        // Part 3 — Input/Output Registration
+        // ================================
+        #region Input/Output Registration
+
         protected override void RegisterInputParams(GH_InputParamManager pManager)
         {
-            // NOTE: Core geometric inputs. All simulation parameters are handled via the Eto dialog.
-            //       Julia is now bundled - no path input required.
+            // Core geometric inputs. All simulation parameters are handled via the Eto dialog.
+            // Julia is now bundled - no path input required.
             pManager.AddRectangleParameter("Boundary Plane", "B", "Boundary plane as rectangle (x,y dimensions)", GH_ParamAccess.item);
-            pManager.AddCurveParameter("Custom Curves", "Crvs", "Optional custom curves to be discretized (multiple closed polylines)", GH_ParamAccess.list);
+            pManager.AddCurveParameter("Custom Curves", "Crvs", "Optional custom curves to be discretised (multiple closed polylines)", GH_ParamAccess.list);
             pManager[1].Optional = true; // Mark Custom Curves as optional
         }
 
@@ -84,16 +107,29 @@ namespace LilyPadGH.Components
             pManager.AddRectangleParameter("Boundary Rectangle", "BR", "Boundary plane as rectangle", GH_ParamAccess.item);
             pManager.AddTextParameter("Boundary JSON", "BJ", "Boundary plane in JSON format", GH_ParamAccess.item);
             pManager.AddTextParameter("Curves JSON", "CJ", "Custom curves points in JSON format (multiple polylines)", GH_ParamAccess.item);
-            pManager.AddPointParameter("Curve Points", "Pts", "Discretized curve points from all curves", GH_ParamAccess.list);
-
-            // NOTE: New output for Julia script results.
+            pManager.AddPointParameter("Curve Points", "Pts", "Discretised curve points from all curves", GH_ParamAccess.list);
             pManager.AddTextParameter("Julia Output", "JO", "Output from the executed Julia script", GH_ParamAccess.item);
+            pManager.AddTextParameter("Animation Path", "AP", "File path to the generated simulation GIF animation", GH_ParamAccess.item);
         }
+
+        #endregion
+
+        // ================================
+        // Part 4 — Custom Attributes
+        // ================================
+        #region Custom Attributes
 
         public override void CreateAttributes()
         {
             m_attributes = new LilyPadCfdAttributes(this);
         }
+
+        #endregion
+
+        // ================================
+        // Part 5 — Main Solution Logic
+        // ================================
+        #region Main Solution Logic
 
         protected override void SolveInstance(IGH_DataAccess DA)
         {
@@ -163,13 +199,13 @@ namespace LilyPadGH.Components
                         var pointListJson = new List<object>();
                         var collectedPoints = new List<Point3d>();
 
-                        // Try to get polyline from curve for straight segment optimization
+                        // Try to get polyline from curve for straight segment optimisation
                         Polyline polyline;
                         bool isPolyline = curve.TryGetPolyline(out polyline);
 
                         if (isPolyline && polyline != null)
                         {
-                            // It's a polyline - just use the vertices (already optimized for straight lines)
+                            // It's a polyline - just use the vertices (already optimised for straight lines)
                             collectedPoints.AddRange(polyline);
                         }
                         else
@@ -271,8 +307,8 @@ namespace LilyPadGH.Components
             _currentCurvesJson = curveJsonString;
 
             // --- JULIA INTEGRATION (Manual via server buttons) ---
-            string juliaOutput = _isServerRunning ? 
-                (_isRunning ? "Simulation running with real-time display..." : "Server ready - Real-time display active") : 
+            string juliaOutput = _isServerRunning ?
+                (_isRunning ? "Simulation running with real-time display..." : "Server ready - Real-time display active") :
                 "Julia server not started. Use dialog to start server.";
 
             // --- Output Assignment ---
@@ -282,15 +318,30 @@ namespace LilyPadGH.Components
             DA.SetData(3, boundaryJsonString);
             DA.SetData(4, curveJsonString);
             DA.SetDataList(5, curvePoints);
-            DA.SetData(6, juliaOutput); // Set the new Julia output
+            DA.SetData(6, juliaOutput);
+            DA.SetData(7, _latestAnimationPath); // Animation path output
 
-            // Update component message on canvas
-            Message = _isRunning ? "Recording..." : (_isServerRunning ? "Live" : "Configured");
+            // Update component message on canvas to reflect current state
+            if (_isRunning)
+            {
+                Message = "Simulating...";
+            }
+            else if (_isServerRunning)
+            {
+                Message = "Server Ready";
+            }
+            else
+            {
+                Message = "Not Running";
+            }
         }
 
-        // ========================================
-        // ASYNC & UI HANDLING - SIMPLIFIED FOR NEW DIALOG
-        // ========================================
+        #endregion
+
+        // ================================
+        // Part 6 — Dialog Management
+        // ================================
+        #region Dialog Management
 
         public void ShowConfigDialog()
         {
@@ -301,7 +352,7 @@ namespace LilyPadGH.Components
             }
 
             _activeDialog = new LilyPadCfdDialog(_settings);
-            
+
             // Wire up events to match new dialog structure
             _activeDialog.OnStartServerClicked += HandleStartServerClicked;
             _activeDialog.OnStopServerClicked += HandleStopServerClicked;
@@ -317,10 +368,17 @@ namespace LilyPadGH.Components
                 _activeDialog = null;
             };
 
-            // NOTE: For Eto, set the Owner property first, then call Show() with no arguments.
+            // For Eto, set the Owner property first, then call Show() with no arguments.
             _activeDialog.Owner = RhinoEtoApp.MainWindow;
             _activeDialog.Show();
         }
+
+        #endregion
+
+        // ================================
+        // Part 7 — Server Control Handlers
+        // ================================
+        #region Server Control Handlers
 
         private void HandleStartServerClicked()
         {
@@ -357,12 +415,21 @@ namespace LilyPadGH.Components
                 };
 
                 _juliaServerProcess.Start();
-                _isServerRunning = true;
-                _activeDialog?.SetServerState(_isServerRunning);
 
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Julia server started successfully");
-                Message = "Live";
-                ExpireSolution(true);
+                // Wait for server to fully start before enabling UI
+                Task.Run(async () =>
+                {
+                    await Task.Delay(3000); // Give Julia 3 seconds to start HTTP server
+
+                    RhinoApp.InvokeOnUiThread(() =>
+                    {
+                        _isServerRunning = true;
+                        _activeDialog?.SetServerState(_isServerRunning);
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Julia server started successfully");
+                        ExpireSolution(true);
+                    });
+                });
+
             }
             catch (Exception ex)
             {
@@ -379,7 +446,6 @@ namespace LilyPadGH.Components
                 // Stop any running simulation first
                 if (_isRunning)
                 {
-                    _cancellationTokenSource?.Cancel();
                     _isRunning = false;
                 }
 
@@ -402,7 +468,6 @@ namespace LilyPadGH.Components
                 _activeDialog?.SetServerState(_isServerRunning);
 
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Julia server stopped successfully");
-                Message = "Configured";
                 ExpireSolution(true);
             }
             catch (Exception ex)
@@ -431,6 +496,14 @@ namespace LilyPadGH.Components
 
             // Update settings and start simulation with recording
             _settings = newSettings;
+
+            // Debug output to verify paths are set
+            RhinoApp.WriteLine("=== DEBUG: UI Paths ===");
+            RhinoApp.WriteLine($"UI Frame Path: {_settings.UIFramePath}");
+            RhinoApp.WriteLine($"UI GIF Path: {_settings.UIGifPath}");
+            RhinoApp.WriteLine($"UI GIF Path Empty: {string.IsNullOrEmpty(_settings.UIGifPath)}");
+            RhinoApp.WriteLine("=======================");
+
             ExpireSolution(true);
 
             // Start simulation with recording
@@ -440,7 +513,7 @@ namespace LilyPadGH.Components
 
                 try
                 {
-                    // Create the JSON data to send to server
+                    // Create the JSON data to send to server with UI paths
                     var serverData = new
                     {
                         simulation_parameters = new
@@ -460,13 +533,22 @@ namespace LilyPadGH.Components
                             animation_duration = _settings.AnimationDuration,
                             plot_body = _settings.PlotBody,
                             simplify_tolerance = _settings.SimplifyTolerance,
-                            max_points_per_poly = _settings.MaxPointsPerPoly
+                            max_points_per_poly = _settings.MaxPointsPerPoly,
+
+                            // UI integration paths
+                            ui_frame_path = _settings.UIFramePath,  // Live PNG frames
+                            ui_gif_path = _settings.UIGifPath       // Final GIF output
                         },
                         polylines = JsonSerializer.Deserialize<JsonElement>(_currentCurvesJson).GetProperty("polylines"),
                         enable_temp_file_output = true // Signal to write frames to temp file
                     };
 
                     string jsonData = JsonSerializer.Serialize(serverData, new JsonSerializerOptions { WriteIndented = true });
+
+                    // Debug: Print the JSON being sent
+                    RhinoApp.WriteLine("=== DEBUG: JSON Sent to Julia ===");
+                    RhinoApp.WriteLine(jsonData.Length > 500 ? jsonData.Substring(0, 500) + "..." : jsonData);
+                    RhinoApp.WriteLine("=================================");
 
                     using var client = new HttpClient();
                     client.Timeout = TimeSpan.FromSeconds(30);
@@ -478,11 +560,45 @@ namespace LilyPadGH.Components
                         if (response.IsSuccessStatusCode)
                         {
                             string responseText = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
                             AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, $"Simulation started: {responseText}");
 
                             _isRunning = true;
-                            Message = "Recording...";
                             ExpireSolution(true);
+
+                            // Monitor for new GIF file creation
+                            Task.Run(async () =>
+                            {
+                                string packageTempDir = Path.Combine(
+                                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                                    "McNeel", "Rhinoceros", "packages", "8.0", "LilyPadGH", "0.0.1", "Temp"
+                                );
+
+                                // Wait up to 60 seconds for GIF to appear
+                                for (int i = 0; i < 60; i++)
+                                {
+                                    await Task.Delay(1000);
+
+                                    if (Directory.Exists(packageTempDir))
+                                    {
+                                        var gifFiles = Directory.GetFiles(packageTempDir, "simulation_*.gif")
+                                            .Select(f => new FileInfo(f))
+                                            .OrderByDescending(f => f.LastWriteTime)
+                                            .FirstOrDefault();
+
+                                        if (gifFiles != null && (DateTime.Now - gifFiles.LastWriteTime).TotalSeconds < 5)
+                                        {
+                                            RhinoApp.InvokeOnUiThread(() =>
+                                            {
+                                                _latestAnimationPath = gifFiles.FullName;
+                                                _isRunning = false;
+                                                ExpireSolution(true);
+                                            });
+                                            break;
+                                        }
+                                    }
+                                }
+                            });
                         }
                         else
                         {
@@ -495,12 +611,23 @@ namespace LilyPadGH.Components
                     RhinoApp.InvokeOnUiThread(() =>
                     {
                         AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Failed to start simulation: {ex.Message}");
+                        _isRunning = false;
+                        ExpireSolution(true);
                     });
                 }
             });
         }
 
-        // NOTE: Helper to update component state and trigger a redraw from any thread.
+        #endregion
+
+        // ================================
+        // Part 8 — Component State Management
+        // ================================
+        #region Component State Management
+
+        /// <summary>
+        /// Helper to update component state and trigger a redraw from any thread.
+        /// </summary>
         private void UpdateComponentState(string status, bool isRunning)
         {
             _status = status;
@@ -512,15 +639,19 @@ namespace LilyPadGH.Components
             });
         }
 
-        // ========================================
-        // JULIA PATH DETECTION METHODS (UNCHANGED)
-        // ========================================
+        #endregion
 
+        // ================================
+        // Part 9 — Julia Path Detection
+        // ================================
+        #region Julia Path Detection
+
+        /// <summary>
+        /// Bundled Julia path detection - prioritises package deployment location.
+        /// Eliminates user-specific path dependencies for team GitHub workflow.
+        /// </summary>
         private string GetJuliaExecutablePath()
         {
-            // NOTE: Bundled Julia path detection - prioritises package deployment location.
-            //       Eliminates user-specific path dependencies for team GitHub workflow.
-
             // First priority: Check the bundled Julia in the package directory
             string packageDirectory = Environment.ExpandEnvironmentVariables(@"%appdata%\McNeel\Rhinoceros\packages\8.0\LilyPadGH\0.0.1");
             string bundledJulia = Path.Combine(packageDirectory, "Julia", "julia-1.11.7-win64", "bin", "julia.exe");
@@ -590,10 +721,14 @@ namespace LilyPadGH.Components
             return scriptPath;
         }
 
-        // ========================================
-        // COMPONENT METADATA
-        // ========================================
+        #endregion
 
+        // ================================
+        // Part 10 — Component Metadata
+        // ================================
+        #region Component Metadata
+
+        // PANEL PLACEMENT
         public override GH_Exposure Exposure => GH_Exposure.primary;
 
         protected override GH_Bitmap Icon
@@ -613,5 +748,7 @@ namespace LilyPadGH.Components
         }
 
         public override Guid ComponentGuid => new Guid("a4b1c2d3-e5f6-4a9b-8c7d-ef1234567890");
+
+        #endregion
     }
 }

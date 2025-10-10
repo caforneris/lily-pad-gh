@@ -1,15 +1,35 @@
+# ========================================
+# FILE: 2d.jl
+# DESC: WaterLily CFD simulation with JSON-driven geometry and UI integration.
+#       Saves final GIF to specified path for in-UI display.
+# --- REVISIONS ---
+# - 2025-10-10: Updated GIF handling for UI integration.
+#   - Accepts ui_gif_path from JSON to save GIF directly to C# dialog location.
+#   - Removed external GIF viewer launching - display happens in C# UI.
+#   - Maintains live PNG frame output for real-time display.
+# ========================================
+
 using WaterLily,StaticArrays,Plots
 using JSON3, ParametricBodies, Dates
+
+# =======================
+# Part 1 — Configuration
+# =======================
 
 # Set GR backend to prevent GUI windows and subprocess spawning
 ENV["GKSwstype"] = "100"  # Use GR headless mode
 gr()
 
-# ========== CONFIGURATION PARAMETERS ==========
-const SIMPLIFY_TOLERANCE = 0.05   # Douglas-Peucker tolerance (higher = fewer points, faster)
-const MAX_POINTS_PER_POLY = 10    # Maximum points per polyline (lower = faster)
+# ==================================
+# Part 2 — Douglas-Peucker Algorithm
+# ==================================
 
-# Douglas-Peucker algorithm for polyline simplification
+"""
+    douglas_peucker(points_x, points_y, tolerance)
+
+Simplifies a polyline using the Douglas-Peucker algorithm.
+Returns indices of points to keep.
+"""
 function douglas_peucker(points_x::Vector{T}, points_y::Vector{T}, tolerance::T) where T
     n = length(points_x)
     if n <= 2
@@ -26,10 +46,9 @@ function douglas_peucker(points_x::Vector{T}, points_y::Vector{T}, tolerance::T)
 
     # Check distance for each intermediate point
     for i in 2:(n-1)
-        # Point to check
         px, py = points_x[i], points_y[i]
 
-        # Distance from point to line
+        # Distance from point to line using formula: |ax + by + c| / sqrt(a² + b²)
         a = y2 - y1
         b = -(x2 - x1)
         c = x2*y1 - y2*x1
@@ -42,9 +61,8 @@ function douglas_peucker(points_x::Vector{T}, points_y::Vector{T}, tolerance::T)
         end
     end
 
-    # If max distance is greater than tolerance, recursively simplify
+    # If max distance exceeds tolerance, recursively simplify
     if max_dist > tolerance
-        # Recursively simplify both parts
         left_indices = douglas_peucker(points_x[1:max_idx], points_y[1:max_idx], tolerance)
         right_indices = douglas_peucker(points_x[max_idx:n], points_y[max_idx:n], tolerance)
 
@@ -60,6 +78,11 @@ function douglas_peucker(points_x::Vector{T}, points_y::Vector{T}, tolerance::T)
     end
 end
 
+"""
+    simplify_polyline_points(px, py, tolerance, max_points)
+
+Simplifies a polyline using Douglas-Peucker, then enforces max point count.
+"""
 function simplify_polyline_points(px::Vector{T}, py::Vector{T}, tolerance::T, max_points::Int) where T
     # Apply Douglas-Peucker simplification
     keep_indices = douglas_peucker(px, py, tolerance)
@@ -82,30 +105,78 @@ function simplify_polyline_points(px::Vector{T}, py::Vector{T}, tolerance::T, ma
     return simplified_px, simplified_py
 end
 
+# ===========================
+# Part 3 — Main Simulation Runner
+# ===========================
+
+"""
+    run_sim(raw_string; mem=Array)
+
+Executes the simulation with parameters and geometry from JSON.
+Saves GIF to specified UI path for in-dialog display.
+"""
 function run_sim(raw_string::AbstractString; mem=Array)
-    # Parse JSON to extract simulation parameters
-    local L, U, Re, anim_duration, plot_body, gif_obj, gif_filename
+    # Parse JSON to extract simulation parameters and UI paths
+    local L, U, Re, anim_duration, plot_body, gif_obj, ui_gif_path
 
     try
         data = JSON3.read(raw_string)
         params = data.simulation_parameters
 
-        # Extract parameters with defaults
+        # Extract simulation parameters with defaults
         L = get(params, :L, 32)
         U = get(params, :U, 1.0)
         Re = get(params, :Re, 250.0)
         anim_duration = get(params, :animation_duration, 1.0)
         plot_body = get(params, :plot_body, true)
-
-        println("🎛️  Using simulation parameters:")
+        
+        # CRITICAL: C# JsonSerializer uses camelCase, so we need to check both naming conventions
+        ui_gif_path = ""
+        if haskey(params, :uiGifPath)
+            ui_gif_path = string(params[:uiGifPath])
+        elseif haskey(params, :ui_gif_path)
+            ui_gif_path = string(params[:ui_gif_path])
+        end
+        
+        ui_frame_path = ""
+        if haskey(params, :uiFramePath)
+            ui_frame_path = string(params[:uiFramePath])
+        elseif haskey(params, :ui_frame_path)
+            ui_frame_path = string(params[:ui_frame_path])
+        end
+        
+        # CRITICAL DEBUG - Force display what we received
+        println("\n" * "="^80)
+        println("🔍 CRITICAL DEBUG - PARAMETER EXTRACTION")
+        println("="^80)
+        println("Raw params object type: ", typeof(params))
+        println("Has uiGifPath key (camelCase)? ", haskey(params, :uiGifPath))
+        println("Has ui_gif_path key (snake_case)? ", haskey(params, :ui_gif_path))
+        if haskey(params, :uiGifPath)
+            println("Raw uiGifPath value: ", params[:uiGifPath])
+            println("Raw value type: ", typeof(params[:uiGifPath]))
+        end
+        if haskey(params, :ui_gif_path)
+            println("Raw ui_gif_path value: ", params[:ui_gif_path])
+            println("Raw value type: ", typeof(params[:ui_gif_path]))
+        end
+        println("Final ui_gif_path string: \"$ui_gif_path\"")
+        println("UI path is empty? ", isempty(ui_gif_path))
+        println("UI path length: ", length(ui_gif_path))
+        println("="^80)
+        println("🎛️  SIMULATION PARAMETERS:")
         println("   L = $L, U = $U, Re = $Re")
-        println("   Animation duration = $anim_duration s, Plot body = $plot_body")
+        println("   Animation duration = $anim_duration s")
+        println("   Plot body = $plot_body")
+        println("="^80 * "\n")
 
     catch e
         println("❌ Error parsing parameters: $e")
+        println("📋 Raw JSON string preview: $(first(raw_string, min(200, length(raw_string))))...")
         # Fallback with default parameters
         L, U, Re = 32, 1.0, 250.0
         anim_duration, plot_body = 1.0, true
+        ui_gif_path = ""
         println("🔧 Using fallback parameters: L=$L, U=$U, Re=$Re")
     end
 
@@ -113,36 +184,69 @@ function run_sim(raw_string::AbstractString; mem=Array)
     println("🎯 Creating simulation with: L=$L, U=$U, Re=$Re")
     sim = make_sim(raw_string; L=L, U=U, Re=Re, mem=mem)
 
-    # Generate a unique filename for the GIF and save to package temp folder
-    timestamp = Dates.format(now(), "yyyymmdd_HHMMSS")
-    gif_filename = "simulation_$(timestamp).gif"
-
     # Create the GIF (sim_gif! returns an AnimatedGif object)
     gif_obj = sim_gif!(sim, duration=anim_duration, clims=(-10,10), plotbody=plot_body)
 
-    # Get the actual file path from the GIF object
+    # Determine final GIF path
     actual_path = gif_obj.filename
-
-    # Move the GIF to the package temp folder
+    
+    if !isempty(ui_gif_path)
+        # Move GIF to UI-specified path for in-dialog display
+        try
+            # Ensure directory exists
+            ui_dir = dirname(ui_gif_path)
+            if !isdir(ui_dir)
+                mkpath(ui_dir)
+            end
+            
+            # Wait a moment to ensure GIF is fully written
+            sleep(0.5)
+            
+            # Copy instead of move to avoid file locking issues
+            cp(actual_path, ui_gif_path, force=true)
+            
+            # Delete original temp file
+            try
+                rm(actual_path)
+            catch
+                println("⚠️  Could not delete original temp file")
+            end
+            
+            actual_path = ui_gif_path
+            println("✅ GIF saved to UI path: $actual_path")
+            println("🚫 External viewer disabled - GIF will display in C# UI")
+            
+            # Return without opening external viewer
+            return actual_path
+        catch e
+            println("⚠️  Could not copy GIF to UI path: $e")
+            println("📁 GIF remains at: $actual_path")
+        end
+    end
+    
+    # Only open external viewer if NO UI path was provided (fallback mode)
+    println("⚠️  No UI path provided - opening external viewer (legacy mode)")
+    
+    # Fallback: save to package temp folder (legacy behaviour)
+    timestamp = Dates.format(now(), "yyyymmdd_HHMMSS")
+    gif_filename = "simulation_$(timestamp).gif"
+    
     package_dir = ENV["APPDATA"] * "\\McNeel\\Rhinoceros\\packages\\8.0\\LilyPadGH\\0.0.1"
     temp_dir = joinpath(package_dir, "Temp")
 
-    # Create temp directory if it doesn't exist
     if !isdir(temp_dir)
         mkpath(temp_dir)
     end
 
-    # Move file to temp directory
     final_gif_path = joinpath(temp_dir, gif_filename)
     try
-        mv(actual_path, final_gif_path)
+        mv(actual_path, final_gif_path, force=true)
         actual_path = final_gif_path
     catch e
         println("Warning: Could not move GIF to temp folder: $e")
-        println("GIF remains at: $actual_path")
     end
-
-    # Open the GIF automatically
+    
+    # Open external viewer only in fallback mode
     try
         if Sys.iswindows()
             run(`cmd /c start "" "$actual_path"`, wait=false)
@@ -151,15 +255,25 @@ function run_sim(raw_string::AbstractString; mem=Array)
         else
             run(`xdg-open $actual_path`, wait=false)
         end
-        println("✅ GIF saved and opened: $actual_path")
+        println("✅ GIF opened in external viewer: $actual_path")
     catch e
-        println("❌ Could not automatically open GIF viewer: $e")
+        println("❌ Could not open external viewer: $e")
         println("📁 GIF saved at: $actual_path")
     end
 
     return actual_path
 end
 
+# ============================
+# Part 4 — Simulation Setup
+# ============================
+
+"""
+    make_sim(raw_string; L, U, Re, mem, T)
+
+Creates a WaterLily simulation with custom geometry from JSON.
+Handles multiple polylines with point simplification.
+"""
 function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float32)
 
     println("running")
@@ -173,14 +287,14 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
             simplify_tolerance = T(get(params, :simplify_tolerance, 0.0))  # No simplification by default
             max_points_per_poly = get(params, :max_points_per_poly, 1000)  # Very high limit by default
         else
-            simplify_tolerance = T(0.0)  # No simplification by default
-            max_points_per_poly = 1000  # Very high limit by default
+            simplify_tolerance = T(0.0)
+            max_points_per_poly = 1000
         end
         println("🔧 Point reduction: tolerance=$simplify_tolerance, max_points=$max_points_per_poly")
     catch e
         println("⚠️  Could not extract point reduction params: $e")
-        simplify_tolerance = T(0.0)  # No simplification by default
-        max_points_per_poly = 1000  # Very high limit by default
+        simplify_tolerance = T(0.0)
+        max_points_per_poly = 1000
     end
 
     # Try to load custom JSON body, fallback to circle
@@ -190,8 +304,6 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
 
         @show typeof(curve_data)
         @show propertynames(curve_data)
-
-
 
         # Check for new multiple polylines schema
         if haskey(curve_data, "polylines") && !isempty(curve_data["polylines"])
@@ -236,17 +348,17 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
             x_min, x_max = extrema(all_px)
             y_min, y_max = extrema(all_py)
 
-            # Scale to simulation domain and center - less aggressive scaling
+            # Scale to simulation domain and center
             domain_width = 8L
             domain_height = 4L
 
-            # Use more reasonable scaling that preserves object size better
-            scale_x = (domain_width * 0.3) / (x_max - x_min)  # Use 30% of domain width
-            scale_y = (domain_height * 0.3) / (y_max - y_min)  # Use 30% of domain height
-            scale = T(min(scale_x, scale_y))  # Use smaller scale to fit both dimensions
+            # Use 30% of domain for object size
+            scale_x = (domain_width * 0.3) / (x_max - x_min)
+            scale_y = (domain_height * 0.3) / (y_max - y_min)
+            scale = T(min(scale_x, scale_y))
 
-            cx = T(domain_width / 2)   # center x
-            cy = T(domain_height / 2)  # center y
+            cx = T(domain_width / 2)
+            cy = T(domain_height / 2)
 
             println("🔧 Scaling: object bounds ($x_min,$y_min) to ($x_max,$y_max)")
             println("🔧 Domain: $(domain_width)×$(domain_height), scale factor: $scale")
@@ -270,16 +382,12 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
                     n = length(px)
                     @inbounds for i in 1:n
                         j = i == n ? 1 : i + 1
-                        # Distance to line segment
                         ax, ay = px[i], py[i]
                         bx, by = px[j], py[j]
 
-                        # Vector from a to b
                         vx, vy = bx - ax, by - ay
-                        # Vector from a to point
                         wx, wy = px_orig - ax, py_orig - ay
 
-                        # Project point onto line segment
                         t_seg = max(T(0), min(T(1), (wx*vx + wy*vy) / (vx*vx + vy*vy + T(1e-10))))
                         closest_x = ax + t_seg * vx
                         closest_y = ay + t_seg * vy
@@ -288,7 +396,7 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
                         min_dist = min(min_dist, dist)
                     end
 
-                    # Use ray casting for inside/outside test for this polygon
+                    # Ray casting for inside/outside test
                     inside = false
                     j = n
                     @inbounds for i in 1:n
@@ -299,10 +407,7 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
                         j = i
                     end
 
-                    # SDF for this polygon
                     poly_sdf = inside ? -min_dist : min_dist
-
-                    # Union operation: minimum distance (closest object)
                     min_dist_to_any = min(min_dist_to_any, poly_sdf)
                 end
 
@@ -311,81 +416,6 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
 
             AutoBody(multi_poly_sdf)
 
-        # Fallback to old single polyline schema
-        elseif haskey(curve_data, "points") && !isempty(curve_data["points"])
-            println("Loading custom JSON body with $(length(curve_data["points"])) points (legacy format)")
-
-            # Get curve points and normalize to simulation domain
-            points = curve_data["points"]
-            px = [T(p["x"]) for p in points]
-            py = [T(p["y"]) for p in points]
-
-            # Find bounds
-            x_min, x_max = extrema(px)
-            y_min, y_max = extrema(py)
-
-            # Scale to simulation domain and center - less aggressive scaling
-            domain_width = 8L
-            domain_height = 4L
-
-            # Use more reasonable scaling that preserves object size better
-            scale_x = (domain_width * 0.3) / (x_max - x_min)  # Use 30% of domain width
-            scale_y = (domain_height * 0.3) / (y_max - y_min)  # Use 30% of domain height
-            scale = min(scale_x, scale_y)  # Use smaller scale to fit both dimensions
-
-            cx = domain_width / 2   # center x
-            cy = domain_height / 2  # center y
-
-            println("🔧 Legacy scaling: object bounds ($x_min,$y_min) to ($x_max,$y_max)")
-            println("🔧 Domain: $(domain_width)×$(domain_height), scale factor: $scale")
-
-            # Simple polygon SDF using point-in-polygon
-            function poly_sdf(x, t)
-                px_sim = x[1]
-                py_sim = x[2]
-
-                # Transform back to original coordinates
-                px_orig = (px_sim - cx) / scale + (x_min + x_max) / 2
-                py_orig = (py_sim - cy) / scale + (y_min + y_max) / 2
-
-                # Simple distance to polygon boundary
-                min_dist = Inf
-                n = length(px)
-                for i in 1:n
-                    j = i == n ? 1 : i + 1
-                    # Distance to line segment
-                    ax, ay = px[i], py[i]
-                    bx, by = px[j], py[j]
-
-                    # Vector from a to b
-                    vx, vy = bx - ax, by - ay
-                    # Vector from a to point
-                    wx, wy = px_orig - ax, py_orig - ay
-
-                    # Project point onto line segment
-                    t = max(0, min(1, (wx*vx + wy*vy) / (vx*vx + vy*vy + 1e-10)))
-                    closest_x = ax + t * vx
-                    closest_y = ay + t * vy
-
-                    dist = sqrt((px_orig - closest_x)^2 + (py_orig - closest_y)^2)
-                    min_dist = min(min_dist, dist)
-                end
-
-                # Use ray casting for inside/outside test
-                inside = false
-                j = n
-                for i in 1:n
-                    if ((py[i] > py_orig) != (py[j] > py_orig)) &&
-                        (px_orig < (px[j] - px[i]) * (py_orig - py[i]) / (py[j] - py[i]) + px[i])
-                        inside = !inside
-                    end
-                    j = i
-                end
-
-                return inside ? -min_dist : min_dist
-            end
-
-            AutoBody(poly_sdf)
         else
             throw("No curve data found in JSON")
         end
@@ -395,6 +425,6 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
         AutoBody((x,t) -> hypot(x[1]-4L, x[2]-2L) - R)
     end
 
-    # make a simulation
+    # Create and return simulation
     Simulation((8L,4L),(U,0),L;U,ν=U*L/Re,body,T,mem)
 end
