@@ -1,19 +1,22 @@
 ﻿// ========================================
-// FILE: LilyPad_EtoDialog.cs
-// PART 3: ETO CONFIGURATION DIALOG WITH REAL-TIME DISPLAY
-// DESC: Creates and manages the pop-up settings window with real-time simulation view.
-//       Reorganised layout with simulation view on the right side.
+// FILE: LilyPad_EtoDialog.cs (CORRECTED VERSION)
+// DESC: Industry-standard CFD configuration dialogue with tabbed interface.
 // --- REVISIONS ---
-// - 2025-09-22: Polished real-time simulation view with proper frame handling.
-//   - Cleaned up button structure to four logical buttons.
-//   - Enhanced frame reading with better error handling and file locking.
-//   - Added proper temp file path communication to Julia server.
-//   - Improved visual feedback and status updates.
-// - 2025-10-10: UI reorganisation for better workflow.
-//   - Moved simulation view to right side of window (vertical split).
-//   - Renamed "Live Simulation View" to "Simulation View".
-//   - Enhanced layout for better visual hierarchy.
-//   - Added extensive debug output and test button for troubleshooting.
+// - 2025-11-04 (DATA URI FIX):
+//   - The `Value does not fall...` error was caused by the IE11 engine's
+//     ~2MB limit for Base64 data URIs.
+// - 2025-11-05 (HISTORY/CLEANUP FIX):
+//   - Implemented user request for GIF history (max 10).
+//   - `OnApplyAndRunButtonClick` now generates a unique timestamped name
+//     for the GIF and HTML files for each run.
+//   - A new `CleanupOldGifs` function is called before each run to delete
+//     the oldest GIF(s) if the count exceeds 10, maintaining a rolling history.
+//   - `OnClosed` now only cleans up session-specific temp files (.png, .html).
+// - 2025-11-05 (NAMING CONVENTION):
+//   - Updated `OnApplyAndRunButtonClick` to use the new naming convention:
+//     `CFD-Simulation{time}s_YYMMDDTTTT.gif`
+//   - Updated `CleanupOldGifs` to find and delete files based on this
+//     new convention.
 // ========================================
 
 using Eto.Drawing;
@@ -21,7 +24,6 @@ using Eto.Forms;
 using System;
 using System.IO;
 using System.Linq;
-using System.Text;
 
 namespace LilyPadGH.Components
 {
@@ -33,36 +35,40 @@ namespace LilyPadGH.Components
         #region Fields & State
 
         private readonly LilyPadCfdSettings _settings;
+        private readonly string _packageTempDir; // Store the main temp directory
         private readonly string _tempFramePath;
-        private readonly string _tempGifPath; // Path for final GIF display
 
-        // UI control references - Settings
-        private NumericStepper _reynoldsStepper;
-        private NumericStepper _velocityStepper;
-        private NumericStepper _gridXStepper;
-        private NumericStepper _gridYStepper;
-        private NumericStepper _durationStepper;
-        private NumericStepper _curveDivisionsStepper;
+        // Note: These are no longer readonly, as they are updated with each run
+        private string _tempGifPath;
+        private string _tempHtmlPath;
 
-        // UI control references - Julia parameters
-        private NumericStepper _simulationLStepper;
-        private NumericStepper _simulationUStepper;
-        private NumericStepper _animationDurationStepper;
-        private CheckBox _plotBodyCheckBox;
-        private NumericStepper _simplifyToleranceStepper;
-        private NumericStepper _maxPointsPerPolyStepper;
+        // Note: Fields for tracking GIF file stability to prevent race conditions.
+        private long _lastGifSize = -1;
+        private DateTime _lastFrameWriteTime = DateTime.MinValue;
+        private bool _isGifDisplayed = false;
 
-        // UI control references - View & status
+        // Note: Added fields for a more robust stability check.
+        // We now wait for the file size to be stable for this duration.
+        private const double GIF_STABILITY_SECONDS = 1.0;
+        private DateTime _lastGifSizeTime = DateTime.MinValue;
+
+        // UI control references
+        private NumericStepper _fluidDensityStepper, _kinematicViscosityStepper, _inletVelocityStepper, _reynoldsNumberStepper;
+        private Button _calculateReButton;
+        private NumericStepper _domainWidthStepper, _domainHeightStepper, _gridXStepper, _gridYStepper, _characteristicLengthStepper;
+        private NumericStepper _timeStepStepper, _totalTimeStepper, _cflNumberStepper;
+        private Button _calculateMaxDtButton;
+        private NumericStepper _maxIterationsStepper, _convergenceToleranceStepper, _relaxationFactorStepper;
+        private NumericStepper _curveDivisionsStepper, _simplifyToleranceStepper, _maxPointsPerPolyStepper, _objectScaleFactorStepper;
+        private NumericStepper _colorScaleMinStepper, _colorScaleMaxStepper, _animationFPSStepper;
+        private CheckBox _showBodyCheckBox, _showVelocityCheckBox, _showPressureCheckBox, _showVorticityCheckBox;
+        private NumericStepper _waterLilyLStepper;
+        private CheckBox _useGPUCheckBox;
+        private DropDown _precisionTypeDropDown;
         private WebView _simulationView;
         private UITimer _viewTimer;
         private Label _statusLabel;
-        private Label _bottomStatusLabel; // Status label below the view
-
-        // UI control references - Action buttons
-        private Button _startServerButton;
-        private Button _stopServerButton;
-        private Button _applyAndRunButton;
-        private Button _closeButton;
+        private Button _startServerButton, _stopServerButton, _applyAndRunButton, _closeButton;
 
         #endregion
 
@@ -71,7 +77,6 @@ namespace LilyPadGH.Components
         // ========================
         #region Events
 
-        // Events for server control and parameter application
         public event Action OnStartServerClicked;
         public event Action OnStopServerClicked;
         public event Action<LilyPadCfdSettings> OnApplyAndRunClicked;
@@ -87,31 +92,28 @@ namespace LilyPadGH.Components
         {
             _settings = currentSettings.Clone();
 
-            // Use the SAME temp directory as Julia uses - the package temp folder
-            string packageTempDir = Path.Combine(
+            // Note: Store the package temp dir as a field
+            _packageTempDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "McNeel", "Rhinoceros", "packages", "8.0", "LilyPadGH", "0.0.1", "Temp"
             );
 
-            // Ensure the directory exists
-            if (!Directory.Exists(packageTempDir))
+            if (!Directory.Exists(_packageTempDir))
             {
-                Directory.CreateDirectory(packageTempDir);
+                Directory.CreateDirectory(_packageTempDir);
             }
 
             string processId = System.Diagnostics.Process.GetCurrentProcess().Id.ToString();
-            _tempFramePath = Path.Combine(packageTempDir, $"lilypad_sim_frame_{processId}.png");
-            _tempGifPath = Path.Combine(packageTempDir, $"lilypad_sim_final_{processId}.gif");
+            _tempFramePath = Path.Combine(_packageTempDir, $"lilypad_sim_frame_{processId}.png");
 
-            Console.WriteLine($"[DIALOG INIT] Frame path: {_tempFramePath}");
-            Console.WriteLine($"[DIALOG INIT] GIF path: {_tempGifPath}");
+            // Note: GIF and HTML paths are now set in the 'Run' button click
+            _tempGifPath = string.Empty;
+            _tempHtmlPath = string.Empty;
 
             BuildUI();
             LoadSettingsIntoUI();
 
-            // Timer for real-time frame updates at 5 FPS
-            _viewTimer = new UITimer();
-            _viewTimer.Interval = 0.2;
+            _viewTimer = new UITimer { Interval = 0.2 };
             _viewTimer.Elapsed += UpdateSimulationView;
             _viewTimer.Start();
         }
@@ -123,205 +125,169 @@ namespace LilyPadGH.Components
         // ========================
         #region Frame Update Logic
 
-        /// <summary>
-        /// Updates the simulation view with the latest frame from the temp file.
-        /// Looks for most recent GIF in the package temp folder.
-        /// Uses WebView to display animated GIFs properly.
-        /// </summary>
         private void UpdateSimulationView(object sender, EventArgs e)
         {
+            // Note: Don't run if path isn't set yet, or if we're done.
+            if (string.IsNullOrEmpty(_tempGifPath) || _isGifDisplayed)
+            {
+                return;
+            }
+
             try
             {
-                // Priority 1: Check for any recent GIF files in the package temp folder
-                string packageTempDir = Path.GetDirectoryName(_tempGifPath);
-
-                if (Directory.Exists(packageTempDir))
+                // STATE 2: CHECKING FOR THE FINAL GIF.
+                if (File.Exists(_tempGifPath))
                 {
-                    var gifFiles = Directory.GetFiles(packageTempDir, "simulation_*.gif")
-                        .Select(f => new FileInfo(f))
-                        .OrderByDescending(f => f.LastWriteTime)
-                        .ToList();
+                    var gifInfo = new FileInfo(_tempGifPath);
 
-                    if (gifFiles.Any())
+                    // Check 1: Has the file size changed since our last check?
+                    if (gifInfo.Length != _lastGifSize)
                     {
-                        // Get the most recent GIF
-                        var latestGif = gifFiles.First();
-
-                        // Only display if it's recent (modified in last 30 seconds)
-                        if ((DateTime.Now - latestGif.LastWriteTime).TotalSeconds < 30)
+                        // Yes, it's different. The file is actively being written (or just appeared).
+                        // Update trackers and report progress.
+                        _lastGifSize = gifInfo.Length;
+                        _lastGifSizeTime = DateTime.Now; // Reset the stability timer
+                        Application.Instance.Invoke(() =>
                         {
-                            Application.Instance.Invoke(() =>
-                            {
-                                try
-                                {
-                                    // Read GIF file as bytes and convert to base64 for embedding
-                                    byte[] gifBytes = File.ReadAllBytes(latestGif.FullName);
-                                    string base64Gif = Convert.ToBase64String(gifBytes);
-
-                                    // Embed GIF as data URI in HTML for full animation support
-                                    string html = $@"
-                                        <html>
-                                        <head>
-                                            <style>
-                                                body {{ 
-                                                    margin: 0; 
-                                                    padding: 10px; 
-                                                    background: #ffffff; 
-                                                    display: flex; 
-                                                    justify-content: center; 
-                                                    align-items: center; 
-                                                    height: 100vh;
-                                                    overflow: hidden;
-                                                    box-sizing: border-box;
-                                                }}
-                                                ::-webkit-scrollbar {{
-                                                    display: none;
-                                                }}
-                                                html {{
-                                                    scrollbar-width: none;
-                                                    -ms-overflow-style: none;
-                                                    overflow: hidden;
-                                                }}
-                                                img {{
-                                                    width: 100%;
-                                                    height: auto;
-                                                    max-height: 100%;
-                                                    object-fit: contain;
-                                                }}
-                                            </style>
-                                        </head>
-                                        <body>
-                                            <img src='data:image/gif;base64,{base64Gif}' alt='Simulation Animation' />
-                                        </body>
-                                        </html>
-                                    ";
-
-                                    _simulationView.LoadHtml(html);
-                                    _statusLabel.Text = $"✅ GIF PLAYING! {latestGif.Name} ({latestGif.Length / 1024}KB, {latestGif.LastWriteTime:HH:mm:ss})";
-                                    _statusLabel.TextColor = Colors.Green;
-                                    _bottomStatusLabel.Text = "Simulation Complete";
-                                    _bottomStatusLabel.TextColor = Colors.Green;
-
-                                    Console.WriteLine($"[SUCCESS] Animated GIF loaded: {latestGif.Name}");
-                                }
-                                catch (Exception ex)
-                                {
-                                    _statusLabel.Text = $"❌ GIF Load Error: {ex.Message}";
-                                    _statusLabel.TextColor = Colors.Red;
-                                    Console.WriteLine($"[ERROR] Failed to load GIF: {ex.Message}");
-                                }
-                            });
-                            return;
-                        }
+                            _statusLabel.Text = $"⏳ Finalising Animation ({gifInfo.Length / 1024} KB)...";
+                            _statusLabel.TextColor = Colors.Orange;
+                        });
                     }
-                }
-
-                // Priority 2: Check for live PNG frames (simulation in progress)
-                if (File.Exists(_tempFramePath))
-                {
-                    var frameInfo = new FileInfo(_tempFramePath);
-
-                    // Only update if file was modified in the last 2 seconds (active simulation)
-                    if ((DateTime.Now - frameInfo.LastWriteTime).TotalSeconds < 2)
+                    // Check 2: Size is stable. Has it been stable for long enough?
+                    else if (gifInfo.Length > 0 && (DateTime.Now - _lastGifSizeTime).TotalSeconds > GIF_STABILITY_SECONDS)
                     {
+                        // Yes, size is non-zero and hasn't changed for 1.0s. It's safe to *try* to read.
                         Application.Instance.Invoke(() =>
                         {
                             try
                             {
-                                // Read PNG file as bytes and convert to base64 for embedding
-                                byte[] pngBytes = File.ReadAllBytes(_tempFramePath);
-                                string base64Png = Convert.ToBase64String(pngBytes);
+                                // --- WEBVIEW SECURITY FIX ---
+                                // 1. Get the relative file name of the GIF
+                                string relativeGifName = gifInfo.Name;
 
-                                // Display live PNG frame as data URI
+                                // 2. Create the HTML content with a relative path
                                 string html = $@"
-                                    <html>
-                                    <head>
-                                        <style>
-                                            body {{ 
-                                                margin: 0; 
-                                                padding: 10px; 
-                                                background: #ffffff; 
-                                                display: flex; 
-                                                justify-content: center; 
-                                                align-items: center; 
-                                                height: 100vh;
-                                                overflow: hidden;
-                                                box-sizing: border-box;
-                                            }}
-                                            ::-webkit-scrollbar {{
-                                                display: none;
-                                            }}
-                                            html {{
-                                                scrollbar-width: none;
-                                                -ms-overflow-style: none;
-                                                overflow: hidden;
-                                            }}
-                                            img {{
-                                                width: 100%;
-                                                height: auto;
-                                                max-height: 100%;
-                                                object-fit: contain;
-                                            }}
-                                        </style>
-                                    </head>
-                                    <body>
-                                        <img src='data:image/png;base64,{base64Png}' alt='Live Frame' />
-                                    </body>
-                                    </html>
-                                ";
+                                    <html><head><style>body{{margin:0;padding:10px;background:#fff;display:flex;justify-content:center;align-items:center;height:100vh;overflow:hidden;box-sizing:border-box;}} ::-webkit-scrollbar{{display:none;}} html{{scrollbar-width:none;-ms-overflow-style:none;}} img{{width:100%;height:auto;max-height:100%;object-fit:contain;}}</style></head>
+                                    <body><img src='{relativeGifName}' alt='Simulation Animation' /></body></html>";
 
-                                _simulationView.LoadHtml(html);
-                                _statusLabel.Text = $"🔄 Live frame updated: {DateTime.Now:HH:mm:ss}";
-                                _statusLabel.TextColor = Colors.Blue;
-                                _bottomStatusLabel.Text = "Simulation Running...";
-                                _bottomStatusLabel.TextColor = Colors.Blue;
+                                // 3. Write this HTML to its own temp file (path was set in 'Run' click)
+                                File.WriteAllText(_tempHtmlPath, html);
+
+                                // 4. Point the WebView's Url to the new HTML file
+                                _simulationView.Url = new Uri(_tempHtmlPath);
+                                // --- END FIX ---
+
+                                // Set final status and lock the UI state by setting the flag.
+                                _statusLabel.Text = $"✅ Displaying: {gifInfo.Name} ({gifInfo.Length / 1024}KB)";
+                                _statusLabel.TextColor = Colors.Green;
+                                _isGifDisplayed = true;
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"Frame decode error: {ex.Message}");
+                                // This will catch any remaining errors
+                                _lastGifSizeTime = DateTime.Now;
+                                _statusLabel.Text = $"❌ GIF Load Error (retrying): {ex.Message}";
+                                _statusLabel.TextColor = Colors.Red;
                             }
                         });
                     }
-                    else
+                    // Check 3: Size is stable, but we're still inside the 1.0s waiting window.
+                    else if (gifInfo.Length > 0)
                     {
-                        // File is stale - simulation likely finished, waiting for GIF
-                        Application.Instance.Invoke(() =>
-                        {
-                            _statusLabel.Text = $"⏳ Simulation finishing - Looking for GIF";
-                            _statusLabel.TextColor = Colors.Orange;
-                            _bottomStatusLabel.Text = "Generating Animation...";
-                            _bottomStatusLabel.TextColor = Colors.Orange;
-                        });
+                        // Do nothing. Just wait for the stability window to pass.
                     }
+
+                    return; // Do not proceed to other states if we're dealing with the final GIF.
                 }
-                else
+
+                // STATE 3: CHECKING FOR LIVE PNG FRAMES (SIMULATION IS RUNNING).
+                if (File.Exists(_tempFramePath))
                 {
-                    // No frame file exists yet - only update status occasionally to avoid spam
-                    if (DateTime.Now.Second % 3 == 0)
+                    var frameInfo = new FileInfo(_tempFramePath);
+
+                    // Use a 5-second tolerance to account for pauses in frame writes.
+                    if ((DateTime.Now - frameInfo.LastWriteTime).TotalSeconds < 5)
                     {
                         Application.Instance.Invoke(() =>
                         {
-                            _statusLabel.Text = $"⏳ Waiting for simulation...";
-                            _statusLabel.TextColor = Colors.Gray;
-                            _bottomStatusLabel.Text = "Waiting for Simulation";
-                            _bottomStatusLabel.TextColor = Colors.Gray;
+                            // Update image only if it's a new frame.
+                            if (frameInfo.LastWriteTime > _lastFrameWriteTime)
+                            {
+                                try
+                                {
+                                    // Use shared read for live frames, as we *expect* them
+                                    // to be in use. This is fine for PNGs.
+                                    byte[] pngBytes = ReadAllBytesShared(_tempFramePath);
+                                    if (pngBytes != null && pngBytes.Length > 0)
+                                    {
+                                        string base64Png = Convert.ToBase64String(pngBytes);
+                                        string html = $@"
+                                            <html><head><style>body{{margin:0;padding:10px;background:#fff;display:flex;justify-content:center;align-items:center;height:100vh;overflow:hidden;box-sizing:border-box;}} ::-webkit-scrollbar{{display:none;}} html{{scrollbar-width:none;-ms-overflow-style:none;}} img{{width:100%;height:auto;max-height:100%;object-fit:contain;}}</style></head>
+                                            <body><img src='data:image/png;base64,{base64Png}' alt='Live Frame' /></body></html>";
+                                        _simulationView.LoadHtml(html);
+                                        _lastFrameWriteTime = frameInfo.LastWriteTime;
+                                    }
+                                }
+                                catch { }
+                            }
+                            // Always update the status text to show activity.
+                            _statusLabel.Text = $"🔄 Simulation Running - Frame updated at {DateTime.Now:HH:mm:ss}";
+                            _statusLabel.TextColor = Colors.Blue;
                         });
                     }
+                    else // Frame exists but is old -> Simulation is likely finished and generating the GIF.
+                    {
+                        Application.Instance.Invoke(() => {
+                            _statusLabel.Text = "⏳ Generating Animation...";
+                            _statusLabel.TextColor = Colors.Orange;
+                        });
+                    }
+                    return; // Don't fall through to idle state.
+                }
+
+                // STATE 4: IDLE / WAITING STATE.
+                // This is the default state, only reached if no temp files are found.
+                Application.Instance.Invoke(() =>
+                {
+                    // Reset the WebView to the placeholder
+                    _simulationView.LoadHtml(@"
+                        <html><head><style>body{margin:0;padding:20px;background:#fff;display:flex;justify-content:center;align-items:center;height:100vh;font-family:Arial,sans-serif;overflow:hidden;}::-webkit-scrollbar{display:none;}html{scrollbar-width:none;-ms-overflow-style:none;}.placeholder{text-align:center;color:#888;}</style></head>
+                        <body><div class='placeholder'><h2>Simulation View</h2><p>Waiting for Simulation</p></div></body></html>");
+
+                    if (DateTime.Now.Second % 2 == 0)
+                    {
+                        _statusLabel.Text = "⏳ Waiting for Simulation";
+                        _statusLabel.TextColor = Colors.Gray;
+                    }
+                });
+            }
+            catch (IOException) { } // Safely ignore transient IO errors.
+            catch (Exception ex)
+            {
+                Application.Instance.Invoke(() =>
+                {
+                    _statusLabel.Text = $"⚠️ Error: {ex.Message}";
+                    _statusLabel.TextColor = Colors.Red;
+                });
+            }
+        }
+
+        // This function is still needed for the live PNG frames, which
+        // we *want* to read permissively.
+        private byte[] ReadAllBytesShared(string path)
+        {
+            try
+            {
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var ms = new MemoryStream())
+                {
+                    fs.CopyTo(ms);
+                    return ms.ToArray();
                 }
             }
             catch (IOException)
             {
-                // File is locked by Julia during write - this is normal, ignore
-            }
-            catch (Exception ex)
-            {
-                // Other errors - log but don't crash
-                Application.Instance.Invoke(() =>
-                {
-                    _statusLabel.Text = $"⚠️ View update error: {ex.Message}";
-                    _statusLabel.TextColor = Colors.Red;
-                });
-                Console.WriteLine($"View update error: {ex.Message}");
+                return null;
             }
         }
 
@@ -332,10 +298,6 @@ namespace LilyPadGH.Components
         // ========================
         #region Server State Management
 
-        /// <summary>
-        /// Updates UI elements to reflect current Julia server state.
-        /// Enables/disables appropriate buttons and provides visual feedback.
-        /// </summary>
         public void SetServerState(bool isServerRunning)
         {
             Application.Instance.Invoke(() =>
@@ -343,30 +305,16 @@ namespace LilyPadGH.Components
                 _startServerButton.Enabled = !isServerRunning;
                 _stopServerButton.Enabled = isServerRunning;
                 _applyAndRunButton.Enabled = isServerRunning;
-
-                // Update button visual states
                 _startServerButton.Text = isServerRunning ? "Server Running" : "Start Server";
                 _startServerButton.BackgroundColor = isServerRunning ? Colors.LightGreen : SystemColors.Control;
-
                 _applyAndRunButton.Text = isServerRunning ? "Apply Settings & Run" : "Start Server First";
                 _applyAndRunButton.BackgroundColor = isServerRunning ? Colors.SteelBlue : Colors.Gray;
+                _statusLabel.Text = isServerRunning ? "✅ Julia Server Ready" : "⚠️ Server Stopped";
+                _statusLabel.TextColor = isServerRunning ? Colors.Blue : Colors.Gray;
 
-                // Update status message
-                _statusLabel.Text = isServerRunning ? "Julia server is running - Ready for simulation" : "Julia server stopped";
-                _bottomStatusLabel.Text = isServerRunning ? "Ready for Simulation" : "Server Stopped";
-                _bottomStatusLabel.TextColor = isServerRunning ? Colors.Blue : Colors.Gray;
-
-                // DON'T clear simulation view when server stops - keep last animation playing
-                // Only clean up temp files
                 if (!isServerRunning)
                 {
-                    try
-                    {
-                        if (File.Exists(_tempFramePath))
-                            File.Delete(_tempFramePath);
-                        // Don't delete GIF - keep it for the animation that's still playing
-                    }
-                    catch { }
+                    try { if (File.Exists(_tempFramePath)) File.Delete(_tempFramePath); } catch { }
                 }
             });
         }
@@ -378,214 +326,151 @@ namespace LilyPadGH.Components
         // ========================
         #region UI Construction
 
-        /// <summary>
-        /// Builds the complete UI layout with settings on left and simulation view on right.
-        /// </summary>
         private void BuildUI()
         {
-            Title = "LilyPad CFD Simulation Control";
-            MinimumSize = new Size(1100, 700);
+            Title = "LilyPad CFD - Comprehensive Simulation Control";
+            MinimumSize = new Size(1200, 800);
             Resizable = true;
-
             InitializeControls();
-
-            // Status label at top
-            _statusLabel = new Label
-            {
-                Text = "Ready to start server",
-                Font = new Font(SystemFont.Default, 10),
-                TextColor = Colors.Blue
-            };
-
-            // Simulation view using WebView for animated GIF support
-            _simulationView = new WebView
-            {
-                Size = new Size(500, 400)
-            };
-
-            // Load initial placeholder HTML with hidden scrollbars
+            _simulationView = new WebView { Size = new Size(500, 400) };
             _simulationView.LoadHtml(@"
-                <html>
-                <head>
-                    <style>
-                        body { 
-                            margin: 0; 
-                            padding: 20px; 
-                            background: #ffffff; 
-                            display: flex; 
-                            justify-content: center; 
-                            align-items: center; 
-                            height: 100vh;
-                            font-family: Arial, sans-serif;
-                            overflow: hidden;
-                        }
-                        ::-webkit-scrollbar {
-                            display: none;
-                        }
-                        html {
-                            scrollbar-width: none;
-                            -ms-overflow-style: none;
-                        }
-                        .placeholder {
-                            text-align: center;
-                            color: #888;
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class='placeholder'>
-                        <h2>Simulation View</h2>
-                        <p>Waiting for Simulation</p>
-                    </div>
-                </body>
-                </html>
-            ");
-
-            // Main layout structure
+                <html><head><style>body{margin:0;padding:20px;background:#fff;display:flex;justify-content:center;align-items:center;height:100vh;font-family:Arial,sans-serif;overflow:hidden;}::-webkit-scrollbar{display:none;}html{scrollbar-width:none;-ms-overflow-style:none;}.placeholder{text-align:center;color:#888;}</style></head>
+                <body><div class='placeholder'><h2>Simulation View</h2><p>Waiting for Simulation</p></div></body></html>");
             var mainLayout = new DynamicLayout { Padding = new Padding(10) };
-
-            // Top: Status bar
-            mainLayout.Add(_statusLabel, yscale: false);
-
-            // Middle: Settings (left) + Simulation View (right)
             var contentSplitter = new Splitter
             {
-                Panel1 = CreateSettingsPanel(),
+                Panel1 = CreateSettingsTabs(),
                 Panel2 = CreateSimulationPanel(),
-                Position = 350, // Reduced from 550 to give more space to simulation view
-                Orientation = Orientation.Horizontal // Horizontal split = left/right panels
+                Position = 320,
+                Orientation = Orientation.Horizontal
             };
             mainLayout.Add(contentSplitter, yscale: true);
-
-            // Bottom: Action buttons
             mainLayout.Add(CreateButtonPanel(), yscale: false);
-
             Content = mainLayout;
         }
 
-        /// <summary>
-        /// Initialises all UI controls and wires up event handlers.
-        /// </summary>
         private void InitializeControls()
         {
-            // Flow parameter controls - reduced to 80 width (quarter of original)
-            _reynoldsStepper = new NumericStepper { MinValue = 1, DecimalPlaces = 1, Width = 80 };
-            _velocityStepper = new NumericStepper { MinValue = 0, DecimalPlaces = 2, Width = 80 };
-
-            // Grid parameter controls - reduced to 80 width
-            _gridXStepper = new NumericStepper { MinValue = 10, Increment = 8, Width = 80 };
-            _gridYStepper = new NumericStepper { MinValue = 10, Increment = 8, Width = 80 };
-            _durationStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 2, Increment = 1.0, Width = 80 };
-            _curveDivisionsStepper = new NumericStepper { MinValue = 2, Increment = 1, Width = 80 };
-
-            // Julia simulation controls - reduced to 80 width
-            _simulationLStepper = new NumericStepper { MinValue = 16, MaxValue = 128, Increment = 8, Value = 32, Width = 80 };
-            _simulationUStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 2, Increment = 0.1, Value = 1.0, Width = 80 };
-            _animationDurationStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 1, Increment = 0.5, Value = 1.0, Width = 80 };
-            _plotBodyCheckBox = new CheckBox { Text = "Show Body in Animation", Checked = true };
-
-            // Point reduction controls - reduced to 80 width
-            _simplifyToleranceStepper = new NumericStepper { MinValue = 0.0, MaxValue = 0.5, DecimalPlaces = 3, Increment = 0.001, Value = 0.0, Width = 80 };
-            _maxPointsPerPolyStepper = new NumericStepper { MinValue = 5, MaxValue = 1000, Increment = 10, Value = 1000, Width = 80 };
-
-            // Action buttons
+            #region Control Initialization
+            _fluidDensityStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 2, Width = 100 };
+            _kinematicViscosityStepper = new NumericStepper { MinValue = 1e-9, MaxValue = 1e-3, DecimalPlaces = 9, Increment = 1e-7, Width = 100 };
+            _inletVelocityStepper = new NumericStepper { MinValue = 0.01, DecimalPlaces = 3, Width = 100 };
+            _reynoldsNumberStepper = new NumericStepper { MinValue = 1, DecimalPlaces = 1, Width = 100 };
+            _calculateReButton = new Button { Text = "Calculate Re", Width = 100 };
+            _calculateReButton.Click += (s, e) => _reynoldsNumberStepper.Value = (_inletVelocityStepper.Value * _characteristicLengthStepper.Value) / _kinematicViscosityStepper.Value;
+            _domainWidthStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 2, Width = 100 };
+            _domainHeightStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 2, Width = 100 };
+            _gridXStepper = new NumericStepper { MinValue = 10, Increment = 8, Width = 100 };
+            _gridYStepper = new NumericStepper { MinValue = 10, Increment = 8, Width = 100 };
+            _characteristicLengthStepper = new NumericStepper { MinValue = 0.001, DecimalPlaces = 4, Width = 100 };
+            _timeStepStepper = new NumericStepper { MinValue = 0.0001, DecimalPlaces = 5, Width = 100 };
+            _totalTimeStepper = new NumericStepper { MinValue = 0.1, MaxValue = 1000, DecimalPlaces = 1, Width = 100 };
+            _cflNumberStepper = new NumericStepper { MinValue = 0.1, MaxValue = 1.0, DecimalPlaces = 2, Width = 100 };
+            _calculateMaxDtButton = new Button { Text = "Calculate Max Δt", Width = 120 };
+            _calculateMaxDtButton.Click += (s, e) => _timeStepStepper.Value = Math.Round(_cflNumberStepper.Value * (_domainWidthStepper.Value / _gridXStepper.Value) / _inletVelocityStepper.Value, 5);
+            _maxIterationsStepper = new NumericStepper { MinValue = 10, Increment = 10, Width = 100 };
+            _convergenceToleranceStepper = new NumericStepper { MinValue = 1e-10, MaxValue = 1e-2, DecimalPlaces = 10, Increment = 1e-6, Width = 100 };
+            _relaxationFactorStepper = new NumericStepper { MinValue = 0.1, MaxValue = 1.0, DecimalPlaces = 2, Width = 100 };
+            _curveDivisionsStepper = new NumericStepper { MinValue = 2, Increment = 1, Width = 100 };
+            _simplifyToleranceStepper = new NumericStepper { MinValue = 0.0, MaxValue = 1.0, DecimalPlaces = 3, Increment = 0.01, Width = 100 };
+            _maxPointsPerPolyStepper = new NumericStepper { MinValue = 5, MaxValue = 5000, Increment = 10, Width = 100 };
+            _objectScaleFactorStepper = new NumericStepper { MinValue = 0.05, MaxValue = 0.95, DecimalPlaces = 2, Increment = 0.05, Width = 100 };
+            _colorScaleMinStepper = new NumericStepper { MinValue = -100, MaxValue = 0, DecimalPlaces = 1, Width = 100 };
+            _colorScaleMaxStepper = new NumericStepper { MinValue = 0, MaxValue = 100, DecimalPlaces = 1, Width = 100 };
+            _animationFPSStepper = new NumericStepper { MinValue = 5, MaxValue = 60, Increment = 5, Width = 100 };
+            _showBodyCheckBox = new CheckBox { Text = "Show Body" };
+            _showVelocityCheckBox = new CheckBox { Text = "Show Velocity Vectors" };
+            _showPressureCheckBox = new CheckBox { Text = "Show Pressure" };
+            _showVorticityCheckBox = new CheckBox { Text = "Show Vorticity" };
+            _waterLilyLStepper = new NumericStepper { MinValue = 16, MaxValue = 128, Increment = 8, Width = 100 };
+            _useGPUCheckBox = new CheckBox { Text = "Use GPU (CUDA)" };
+            _precisionTypeDropDown = new DropDown { Width = 100, Items = { "Float32", "Float64" }, SelectedIndex = 0 };
+            _statusLabel = new Label { Text = "Ready to start server", Font = new Font(SystemFont.Default, 10), TextColor = Colors.Gray, TextAlignment = TextAlignment.Center };
             _startServerButton = new Button { Text = "Start Server", Width = 120 };
             _stopServerButton = new Button { Text = "Stop Server", Width = 120, Enabled = false };
             _applyAndRunButton = new Button { Text = "Start Server First", Width = 150, Enabled = false, BackgroundColor = Colors.Gray };
             _closeButton = new Button { Text = "Close", Width = 80 };
-
-            // Wire up button events
             _startServerButton.Click += (s, e) => OnStartServerClicked?.Invoke();
             _stopServerButton.Click += (s, e) => OnStopServerClicked?.Invoke();
             _applyAndRunButton.Click += OnApplyAndRunButtonClick;
             _closeButton.Click += (s, e) => Close();
+            #endregion
         }
 
-        /// <summary>
-        /// Creates the left panel containing all simulation settings.
-        /// Organised into logical groups with clear headings.
-        /// </summary>
-        private Control CreateSettingsPanel()
+        private Control CreateSettingsTabs()
         {
-            var layout = new DynamicLayout { DefaultSpacing = new Size(5, 5), Padding = new Padding(10) };
-
-            // Flow parameters section
-            layout.Add(new Label { Text = "Flow Parameters", Font = new Font(SystemFont.Bold) });
-            layout.AddRow(new Label { Text = "Reynolds Number:" }, _reynoldsStepper);
-            layout.AddRow(new Label { Text = "Flow Velocity (m/s):" }, _velocityStepper);
-
-            layout.AddSpace();
-
-            // Grid parameters section
-            layout.Add(new Label { Text = "Grid Parameters", Font = new Font(SystemFont.Bold) });
-            layout.AddRow(new Label { Text = "Grid Resolution X:" }, _gridXStepper);
-            layout.AddRow(new Label { Text = "Grid Resolution Y:" }, _gridYStepper);
-            layout.AddRow(new Label { Text = "Simulation Duration (s):" }, _durationStepper);
-            layout.AddRow(new Label { Text = "Curve Divisions:" }, _curveDivisionsStepper);
-
-            layout.AddSpace();
-
-            // Julia simulation parameters section
-            layout.Add(new Label { Text = "Julia Simulation Parameters", Font = new Font(SystemFont.Bold) });
-            layout.AddRow(new Label { Text = "Simulation Scale (L):" }, _simulationLStepper);
-            layout.AddRow(new Label { Text = "Flow Scale (U):" }, _simulationUStepper);
-            layout.AddRow(new Label { Text = "Animation Duration (s):" }, _animationDurationStepper);
-            layout.Add(_plotBodyCheckBox);
-
-            layout.AddSpace();
-
-            // Point reduction settings section
-            layout.Add(new Label { Text = "Point Reduction Settings", Font = new Font(SystemFont.Bold) });
-            layout.AddRow(new Label { Text = "Simplify Tolerance:" }, _simplifyToleranceStepper);
-            layout.AddRow(new Label { Text = "Max Points Per Polyline:" }, _maxPointsPerPolyStepper);
-
-            layout.Add(null, yscale: true); // Flexible spacer at bottom
-
-            return layout;
+            var tabs = new TabControl();
+            #region Tab: Flow & Domain
+            var tab1 = new TabPage { Text = "Flow & Domain" };
+            var layout1 = new DynamicLayout { DefaultSpacing = new Size(5, 5), Padding = new Padding(10) };
+            layout1.Add(new Label { Text = "Fluid Properties", Font = new Font(SystemFont.Bold) });
+            layout1.AddRow(new Label { Text = "Density (kg/m³):" }, _fluidDensityStepper);
+            layout1.AddRow(new Label { Text = "Kinematic Viscosity (m²/s):" }, _kinematicViscosityStepper);
+            layout1.AddRow(new Label { Text = "Inlet Velocity (m/s):" }, _inletVelocityStepper);
+            layout1.AddRow(new Label { Text = "Reynolds Number:" }, _reynoldsNumberStepper);
+            layout1.AddRow(null, _calculateReButton);
+            layout1.AddSpace();
+            layout1.Add(new Label { Text = "Domain Configuration", Font = new Font(SystemFont.Bold) });
+            layout1.AddRow(new Label { Text = "Width (m):" }, _domainWidthStepper);
+            layout1.AddRow(new Label { Text = "Height (m):" }, _domainHeightStepper);
+            layout1.AddRow(new Label { Text = "Grid Cells X:" }, _gridXStepper);
+            layout1.AddRow(new Label { Text = "Grid Cells Y:" }, _gridYStepper);
+            layout1.AddRow(new Label { Text = "Characteristic Length (m):" }, _characteristicLengthStepper);
+            layout1.AddSpace();
+            layout1.Add(new Label { Text = "Time Stepping", Font = new Font(SystemFont.Bold) });
+            layout1.AddRow(new Label { Text = "Time Step (s):" }, _timeStepStepper);
+            layout1.AddRow(new Label { Text = "Total Simulation Time (s):" }, _totalTimeStepper);
+            layout1.AddRow(new Label { Text = "CFL Number:" }, _cflNumberStepper);
+            layout1.AddRow(null, _calculateMaxDtButton);
+            layout1.AddSpace();
+            layout1.Add(new Label { Text = "Solver Settings", Font = new Font(SystemFont.Bold) });
+            layout1.AddRow(new Label { Text = "Max Iterations:" }, _maxIterationsStepper);
+            layout1.AddRow(new Label { Text = "Convergence Tolerance:" }, _convergenceToleranceStepper);
+            layout1.AddRow(new Label { Text = "Relaxation Factor:" }, _relaxationFactorStepper);
+            layout1.Add(null, yscale: true);
+            tab1.Content = new Scrollable { Content = layout1, Border = BorderType.None };
+            tabs.Pages.Add(tab1);
+            #endregion
+            #region Tab: Geometry & Viz
+            var tab2 = new TabPage { Text = "Geometry & Viz" };
+            var layout2 = new DynamicLayout { DefaultSpacing = new Size(5, 5), Padding = new Padding(10) };
+            layout2.Add(new Label { Text = "Geometry Settings", Font = new Font(SystemFont.Bold) });
+            layout2.AddRow(new Label { Text = "Curve Divisions:" }, _curveDivisionsStepper);
+            layout2.AddRow(new Label { Text = "Simplify Tolerance:" }, _simplifyToleranceStepper);
+            layout2.AddRow(new Label { Text = "Max Points/Polyline:" }, _maxPointsPerPolyStepper);
+            layout2.AddRow(new Label { Text = "Object Scale (0-1):" }, _objectScaleFactorStepper);
+            layout2.AddSpace();
+            layout2.Add(new Label { Text = "Visualization Settings", Font = new Font(SystemFont.Bold) });
+            layout2.AddRow(new Label { Text = "Color Min:" }, _colorScaleMinStepper);
+            layout2.AddRow(new Label { Text = "Color Max:" }, _colorScaleMaxStepper);
+            layout2.AddRow(new Label { Text = "Animation FPS:" }, _animationFPSStepper);
+            layout2.Add(_showBodyCheckBox);
+            layout2.Add(_showVelocityCheckBox);
+            layout2.Add(_showPressureCheckBox);
+            layout2.Add(_showVorticityCheckBox);
+            layout2.AddSpace();
+            layout2.Add(new Label { Text = "Advanced Settings", Font = new Font(SystemFont.Bold) });
+            layout2.AddRow(new Label { Text = "WaterLily L:" }, _waterLilyLStepper);
+            layout2.AddRow(new Label { Text = "Precision:" }, _precisionTypeDropDown);
+            layout2.Add(_useGPUCheckBox);
+            layout2.Add(null, yscale: true);
+            tab2.Content = new Scrollable { Content = layout2, Border = BorderType.None };
+            tabs.Pages.Add(tab2);
+            #endregion
+            return tabs;
         }
 
-        /// <summary>
-        /// Creates the right panel containing the simulation view.
-        /// Shows real-time frames during simulation and final GIF when complete.
-        /// </summary>
         private Control CreateSimulationPanel()
         {
             var layout = new DynamicLayout { Padding = new Padding(10) };
-
-            layout.Add(new Label { Text = "Simulation View", Font = new Font(SystemFont.Bold) });
             layout.Add(_simulationView, yscale: true);
-
-            // Bottom status label replacing the old placeholder text
-            _bottomStatusLabel = new Label
-            {
-                Text = "Waiting for Simulation",
-                TextAlignment = TextAlignment.Center,
-                TextColor = Colors.Gray
-            };
-            layout.Add(_bottomStatusLabel, yscale: false);
-
+            layout.Add(_statusLabel, yscale: false);
             return layout;
         }
 
-        /// <summary>
-        /// Creates the bottom button panel with all action buttons.
-        /// Organised left-to-right: server controls, spacer, run button, close button.
-        /// </summary>
         private Control CreateButtonPanel()
         {
-            return new TableLayout
-            {
-                Spacing = new Size(10, 5),
-                Rows = {
-                    new TableRow(
-                        _startServerButton,
-                        _stopServerButton,
-                        new TableCell(null, true), // Flexible spacer
-                        _applyAndRunButton,
-                        _closeButton
-                    )
-                }
-            };
+            return new TableLayout { Spacing = new Size(10, 5), Rows = { new TableRow(_startServerButton, _stopServerButton, new TableCell(null, true), _applyAndRunButton, _closeButton) } };
         }
 
         #endregion
@@ -595,46 +480,71 @@ namespace LilyPadGH.Components
         // ========================
         #region Settings Management
 
-        /// <summary>
-        /// Loads current settings into UI controls.
-        /// Called during dialog initialisation.
-        /// </summary>
         private void LoadSettingsIntoUI()
         {
-            _reynoldsStepper.Value = _settings.ReynoldsNumber;
-            _velocityStepper.Value = _settings.Velocity;
+            _fluidDensityStepper.Value = _settings.FluidDensity;
+            _kinematicViscosityStepper.Value = _settings.KinematicViscosity;
+            _inletVelocityStepper.Value = _settings.InletVelocity;
+            _reynoldsNumberStepper.Value = _settings.ReynoldsNumber;
+            _domainWidthStepper.Value = _settings.DomainWidth;
+            _domainHeightStepper.Value = _settings.DomainHeight;
             _gridXStepper.Value = _settings.GridResolutionX;
             _gridYStepper.Value = _settings.GridResolutionY;
-            _durationStepper.Value = _settings.Duration;
+            _characteristicLengthStepper.Value = _settings.CharacteristicLength;
+            _timeStepStepper.Value = _settings.TimeStep;
+            _totalTimeStepper.Value = _settings.TotalSimulationTime;
+            _cflNumberStepper.Value = _settings.CFLNumber;
+            _maxIterationsStepper.Value = _settings.MaxIterations;
+            _convergenceToleranceStepper.Value = _settings.ConvergenceTolerance;
+            _relaxationFactorStepper.Value = _settings.RelaxationFactor;
             _curveDivisionsStepper.Value = _settings.CurveDivisions;
-            _simulationLStepper.Value = _settings.SimulationL;
-            _simulationUStepper.Value = _settings.SimulationU;
-            _animationDurationStepper.Value = _settings.AnimationDuration;
-            _plotBodyCheckBox.Checked = _settings.PlotBody;
             _simplifyToleranceStepper.Value = _settings.SimplifyTolerance;
             _maxPointsPerPolyStepper.Value = _settings.MaxPointsPerPoly;
-
+            _objectScaleFactorStepper.Value = _settings.ObjectScaleFactor;
+            _colorScaleMinStepper.Value = _settings.ColorScaleMin;
+            _colorScaleMaxStepper.Value = _settings.ColorScaleMax;
+            _animationFPSStepper.Value = _settings.AnimationFPS;
+            _showBodyCheckBox.Checked = _settings.ShowBody;
+            _showVelocityCheckBox.Checked = _settings.ShowVelocityVectors;
+            _showPressureCheckBox.Checked = _settings.ShowPressure;
+            _showVorticityCheckBox.Checked = _settings.ShowVorticity;
+            _waterLilyLStepper.Value = _settings.WaterLilyL;
+            _useGPUCheckBox.Checked = _settings.UseGPU;
+            _precisionTypeDropDown.SelectedIndex = _settings.PrecisionType == "Float64" ? 1 : 0;
             SetServerState(false);
         }
 
-        /// <summary>
-        /// Updates settings object from current UI control values.
-        /// Called before applying settings and running simulation.
-        /// </summary>
         private void UpdateSettingsFromUI()
         {
-            _settings.ReynoldsNumber = _reynoldsStepper.Value;
-            _settings.Velocity = _velocityStepper.Value;
+            _settings.FluidDensity = _fluidDensityStepper.Value;
+            _settings.KinematicViscosity = _kinematicViscosityStepper.Value;
+            _settings.InletVelocity = _inletVelocityStepper.Value;
+            _settings.ReynoldsNumber = _reynoldsNumberStepper.Value;
+            _settings.DomainWidth = _domainWidthStepper.Value;
+            _settings.DomainHeight = _domainHeightStepper.Value;
             _settings.GridResolutionX = (int)_gridXStepper.Value;
             _settings.GridResolutionY = (int)_gridYStepper.Value;
-            _settings.Duration = _durationStepper.Value;
+            _settings.CharacteristicLength = _characteristicLengthStepper.Value;
+            _settings.TimeStep = _timeStepStepper.Value;
+            _settings.TotalSimulationTime = _totalTimeStepper.Value;
+            _settings.CFLNumber = _cflNumberStepper.Value;
+            _settings.MaxIterations = (int)_maxIterationsStepper.Value;
+            _settings.ConvergenceTolerance = _convergenceToleranceStepper.Value;
+            _settings.RelaxationFactor = _relaxationFactorStepper.Value;
             _settings.CurveDivisions = (int)_curveDivisionsStepper.Value;
-            _settings.SimulationL = (int)_simulationLStepper.Value;
-            _settings.SimulationU = _simulationUStepper.Value;
-            _settings.AnimationDuration = _animationDurationStepper.Value;
-            _settings.PlotBody = _plotBodyCheckBox.Checked ?? true;
             _settings.SimplifyTolerance = _simplifyToleranceStepper.Value;
             _settings.MaxPointsPerPoly = (int)_maxPointsPerPolyStepper.Value;
+            _settings.ObjectScaleFactor = _objectScaleFactorStepper.Value;
+            _settings.ColorScaleMin = _colorScaleMinStepper.Value;
+            _settings.ColorScaleMax = _colorScaleMaxStepper.Value;
+            _settings.AnimationFPS = (int)_animationFPSStepper.Value;
+            _settings.ShowBody = _showBodyCheckBox.Checked ?? true;
+            _settings.ShowVelocityVectors = _showVelocityCheckBox.Checked ?? false;
+            _settings.ShowPressure = _showPressureCheckBox.Checked ?? false;
+            _settings.ShowVorticity = _showVorticityCheckBox.Checked ?? true;
+            _settings.WaterLilyL = (int)_waterLilyLStepper.Value;
+            _settings.UseGPU = _useGPUCheckBox.Checked ?? false;
+            _settings.PrecisionType = _precisionTypeDropDown.SelectedIndex == 1 ? "Float64" : "Float32";
         }
 
         #endregion
@@ -644,28 +554,113 @@ namespace LilyPadGH.Components
         // ========================
         #region Event Handlers
 
-        /// <summary>
-        /// Handles Apply Settings & Run button click.
-        /// Updates settings from UI, passes temp paths to component, and triggers simulation.
-        /// </summary>
         private void OnApplyAndRunButtonClick(object sender, EventArgs e)
         {
+            // --- NEW NAMING CONVENTION LOGIC ---
+            // 1. Run cleanup logic *before* creating new paths
+            CleanupOldGifs();
+
+            // 2. Update settings from UI *first* to get the simulation time
             UpdateSettingsFromUI();
 
-            // Pass both temp paths to the component for Julia communication
-            _settings.UIFramePath = _tempFramePath; // Live PNG frames
-            _settings.UIGifPath = _tempGifPath;     // Final GIF output
+            // 3. Generate new, unique paths based on user convention
+            //    e.g., CFD-Simulation10s_2511051547
+            string simTime = _settings.TotalSimulationTime.ToString("F0"); // "F0" = 0 decimal places
+            string date = DateTime.Now.ToString("yyMMdd");
+            string time = DateTime.Now.ToString("HHmm");
+            string timestamp = date + time; // YYMMDDTTTT
 
-            // Debug output to verify paths are set
-            Console.WriteLine("=== DIALOG DEBUG: Paths Set ===");
-            Console.WriteLine($"Frame Path: {_tempFramePath}");
-            Console.WriteLine($"GIF Path: {_tempGifPath}");
-            Console.WriteLine($"GIF Path Empty: {string.IsNullOrEmpty(_tempGifPath)}");
-            Console.WriteLine("==============================");
+            string baseName = $"CFD-Simulation{simTime}s_{timestamp}";
+            string viewName = $"lilypad_sim_view_{timestamp}"; // Matching HTML file
+
+            _tempGifPath = Path.Combine(_packageTempDir, $"{baseName}.gif");
+            _tempHtmlPath = Path.Combine(_packageTempDir, $"{viewName}.html");
+            // --- END NEW LOGIC ---
+
+            // Note: Reset state flags and UI for the new simulation run.
+            _isGifDisplayed = false;
+            _lastGifSize = -1;
+            _lastFrameWriteTime = DateTime.MinValue;
+            _lastGifSizeTime = DateTime.MinValue;
+
+            _simulationView.LoadHtml(@"
+                <html><head><style>body{margin:0;padding:20px;background:#fff;display:flex;justify-content:center;align-items:center;height:100vh;font-family:Arial,sans-serif;overflow:hidden;}::-webkit-scrollbar{display:none;}html{scrollbar-width:none;-ms-overflow-style:none;}.placeholder{text-align:center;color:#888;}</style></head>
+                <body><div class='placeholder'><h2>Simulation View</h2><p>Starting Simulation...</p></div></body></html>");
+
+            // Pass new paths to settings object for Julia
+            _settings.UIFramePath = _tempFramePath;
+            _settings.UIGifPath = _tempGifPath;
+
+            int totalCells = _settings.GridResolutionX * _settings.GridResolutionY;
+            string timeEstimate = totalCells < 10000 ? "< 1 min" : totalCells < 50000 ? "1-5 min" : totalCells < 100000 ? "5-15 min" : "> 15 min";
 
             OnApplyAndRunClicked?.Invoke(_settings);
 
-            _statusLabel.Text = "Simulation starting - Real-time view will update shortly...";
+            _statusLabel.Text = $"🚀 Simulation Starting... Estimated time: {timeEstimate}";
+            _statusLabel.TextColor = Colors.Blue;
+        }
+
+        // --- NEW FUNCTION ---
+        /// <summary>
+        /// Scans the temp directory and deletes the oldest GIFs if the count exceeds 10.
+        /// </summary>
+        private void CleanupOldGifs()
+        {
+            const int MAX_GIF_COUNT = 10;
+            try
+            {
+                var dirInfo = new DirectoryInfo(_packageTempDir);
+
+                // Find all simulation GIFs using the new convention
+                var gifs = dirInfo.GetFiles("CFD-Simulation*.gif") // Use new wildcard
+                                 .OrderBy(f => f.CreationTime)
+                                 .ToList();
+
+                // Check if we're at or over the limit
+                if (gifs.Count >= MAX_GIF_COUNT)
+                {
+                    // Calculate how many to delete (e.g., if 10 exist, delete 1 to make room)
+                    int deleteCount = gifs.Count - MAX_GIF_COUNT + 1;
+                    var oldGifs = gifs.Take(deleteCount);
+
+                    foreach (var oldGif in oldGifs)
+                    {
+                        try
+                        {
+                            // Delete the GIF
+                            oldGif.Delete();
+
+                            // Also delete its matching HTML file
+                            // e.g., "CFD-Simulation10s_2511051547.gif"
+                            // extract "2511051547"
+                            string gifName = oldGif.Name;
+                            int underscoreIndex = gifName.LastIndexOf('_');
+                            if (underscoreIndex != -1 && gifName.Length > underscoreIndex + 1)
+                            {
+                                // e.g., "2511051547"
+                                string timestamp = gifName.Substring(underscoreIndex + 1).Replace(".gif", "");
+                                // e.g., "lilypad_sim_view_2511051547.html"
+                                string htmlName = $"lilypad_sim_view_{timestamp}.html";
+                                string htmlPath = Path.Combine(_packageTempDir, htmlName);
+
+                                if (File.Exists(htmlPath))
+                                {
+                                    File.Delete(htmlPath);
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // Log, but don't crash the app
+                            System.Diagnostics.Debug.WriteLine($"Failed to delete old file: {ex.Message}");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to run GIF cleanup: {ex.Message}");
+            }
         }
 
         #endregion
@@ -675,14 +670,9 @@ namespace LilyPadGH.Components
         // ========================
         #region Cleanup
 
-        /// <summary>
-        /// Handles dialog close event - cleans up resources and temp files.
-        /// </summary>
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
-
-            // Stop and clean up timer
             _viewTimer?.Stop();
             if (_viewTimer != null)
             {
@@ -690,34 +680,29 @@ namespace LilyPadGH.Components
                 _viewTimer = null;
             }
 
-            // Remove temp files (both PNG frames and final GIF)
+            // Clean up session-specific files
+            try { if (File.Exists(_tempFramePath)) File.Delete(_tempFramePath); } catch { }
+
+            // Clean up all HTML wrappers (GIFs will remain, per user request)
             try
             {
-                if (File.Exists(_tempFramePath))
-                    File.Delete(_tempFramePath);
-                if (File.Exists(_tempGifPath))
-                    File.Delete(_tempGifPath);
+                var dirInfo = new DirectoryInfo(_packageTempDir);
+                var htmlFiles = dirInfo.GetFiles("lilypad_sim_view_*.html"); // This wildcard works
+                foreach (var htmlFile in htmlFiles)
+                {
+                    htmlFile.Delete();
+                }
             }
             catch { }
         }
-
         #endregion
 
         // ========================
         // Region: Public Properties
         // ========================
         #region Public Properties
-
-        /// <summary>
-        /// Gets the temp frame path where Julia writes live simulation frames.
-        /// </summary>
         public string UIFramePath => _tempFramePath;
-
-        /// <summary>
-        /// Gets the temp GIF path where Julia saves the final simulation GIF.
-        /// </summary>
         public string UIGifPath => _tempGifPath;
-
         #endregion
     }
 }
