@@ -1,22 +1,6 @@
 ﻿// ========================================
-// FILE: LilyPad_EtoDialog.cs (CORRECTED VERSION)
-// DESC: Industry-standard CFD configuration dialogue with tabbed interface.
-// --- REVISIONS ---
-// - 2025-11-04 (DATA URI FIX):
-//   - The `Value does not fall...` error was caused by the IE11 engine's
-//     ~2MB limit for Base64 data URIs.
-// - 2025-11-05 (HISTORY/CLEANUP FIX):
-//   - Implemented user request for GIF history (max 10).
-//   - `OnApplyAndRunButtonClick` now generates a unique timestamped name
-//     for the GIF and HTML files for each run.
-//   - A new `CleanupOldGifs` function is called before each run to delete
-//     the oldest GIF(s) if the count exceeds 10, maintaining a rolling history.
-//   - `OnClosed` now only cleans up session-specific temp files (.png, .html).
-// - 2025-11-05 (NAMING CONVENTION):
-//   - Updated `OnApplyAndRunButtonClick` to use the new naming convention:
-//     `CFD-Simulation{time}s_YYMMDDTTTT.gif`
-//   - Updated `CleanupOldGifs` to find and delete files based on this
-//     new convention.
+// FILE: LilyPad_EtoDialog.cs
+// DESC: CFD configuration dialogue with tabbed interface.
 // ========================================
 
 using Eto.Drawing;
@@ -25,13 +9,21 @@ using System;
 using System.IO;
 using System.Linq;
 
+// Note: Resolves CS0104 ambiguity between Eto.Forms.Button and
+// System.Windows.Forms.VisualStyles.VisualStyleElement.Button
+// by explicitly aliasing 'Button' to the Eto.Forms version.
+using Button = Eto.Forms.Button;
+
+// Note: Removed the faulty 'using Separator = ...' alias which caused CS0234.
+// That control does not exist for layouts.
+
 namespace LilyPadGH.Components
 {
     public sealed class LilyPadCfdDialog : Form
     {
-        // ========================
-        // Region: Fields & State
-        // ========================
+        // =======================
+        // Part 1 — Fields & State
+        // =======================
         #region Fields & State
 
         private readonly LilyPadCfdSettings _settings;
@@ -67,14 +59,19 @@ namespace LilyPadGH.Components
         private DropDown _precisionTypeDropDown;
         private WebView _simulationView;
         private UITimer _viewTimer;
-        private Label _statusLabel;
-        private Button _startServerButton, _stopServerButton, _applyAndRunButton, _closeButton;
+
+        // --- REVISION: Button Consolidation ---
+        // Note: Merged _startServerButton and _stopServerButton into a single toggle button.
+        private Button _serverToggleButton;
+        // --- END REVISION ---
+
+        private Button _applyAndRunButton, _closeButton;
 
         #endregion
 
-        // ========================
-        // Region: Events
-        // ========================
+        // ==============
+        // Part 2 — Events
+        // ==============
         #region Events
 
         public event Action OnStartServerClicked;
@@ -83,9 +80,9 @@ namespace LilyPadGH.Components
 
         #endregion
 
-        // ========================
-        // Region: Constructor
-        // ========================
+        // ===================
+        // Part 3 — Constructor
+        // ===================
         #region Constructor
 
         public LilyPadCfdDialog(LilyPadCfdSettings currentSettings)
@@ -120,9 +117,9 @@ namespace LilyPadGH.Components
 
         #endregion
 
-        // ========================
-        // Region: Frame Update Logic
-        // ========================
+        // =============================
+        // Part 4 — Frame Update Logic
+        // =============================
         #region Frame Update Logic
 
         private void UpdateSimulationView(object sender, EventArgs e)
@@ -146,12 +143,7 @@ namespace LilyPadGH.Components
                         // Yes, it's different. The file is actively being written (or just appeared).
                         // Update trackers and report progress.
                         _lastGifSize = gifInfo.Length;
-                        _lastGifSizeTime = DateTime.Now; // Reset the stability timer
-                        Application.Instance.Invoke(() =>
-                        {
-                            _statusLabel.Text = $"⏳ Finalising Animation ({gifInfo.Length / 1024} KB)...";
-                            _statusLabel.TextColor = Colors.Orange;
-                        });
+                        _lastGifSizeTime = DateTime.Now;
                     }
                     // Check 2: Size is stable. Has it been stable for long enough?
                     else if (gifInfo.Length > 0 && (DateTime.Now - _lastGifSizeTime).TotalSeconds > GIF_STABILITY_SECONDS)
@@ -167,56 +159,73 @@ namespace LilyPadGH.Components
 
                                 // 2. Create the HTML content with a relative path
                                 string html = $@"
-                                    <html><head><style>body{{margin:0;padding:10px;background:#fff;display:flex;justify-content:center;align-items:center;height:100vh;overflow:hidden;box-sizing:border-box;}} ::-webkit-scrollbar{{display:none;}} html{{scrollbar-width:none;-ms-overflow-style:none;}} img{{width:100%;height:auto;max-height:100%;object-fit:contain;}}</style></head>
-                                    <body><img src='{relativeGifName}' alt='Simulation Animation' /></body></html>";
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <head>
+                                        <style>
+                                            body {{
+                                                margin: 0;
+                                                padding: 0;
+                                                background: #fff;
+                                                display: flex;
+                                                justify-content: center;
+                                                align-items: center;
+                                                height: 100vh;
+                                                overflow: hidden;
+                                                box-sizing: border-box;
+                                            }}
+                                            ::-webkit-scrollbar {{ display: none; }}
+                                            html {{
+                                                scrollbar-width: none;
+                                                -ms-overflow-style: none;
+                                            }}
+                                            img {{
+                                                width: 100%;
+                                                height: auto;
+                                                max-height: 100%;
+                                                object-fit: contain;
+                                            }}
+                                        </style>
+                                    </head>
+                                    <body>
+                                        <img src='{relativeGifName}' alt='CFD Animation' />
+                                    </body>
+                                    </html>";
 
-                                // 3. Write this HTML to its own temp file (path was set in 'Run' click)
+                                // 3. Write the HTML to the temp path
                                 File.WriteAllText(_tempHtmlPath, html);
 
-                                // 4. Point the WebView's Url to the new HTML file
+                                // 4. Navigate to the HTML file (which lives in the same directory as the GIF)
                                 _simulationView.Url = new Uri(_tempHtmlPath);
-                                // --- END FIX ---
 
-                                // Set final status and lock the UI state by setting the flag.
-                                _statusLabel.Text = $"✅ Displaying: {gifInfo.Name} ({gifInfo.Length / 1024}KB)";
-                                _statusLabel.TextColor = Colors.Green;
                                 _isGifDisplayed = true;
                             }
                             catch (Exception ex)
                             {
-                                // This will catch any remaining errors
-                                _lastGifSizeTime = DateTime.Now;
-                                _statusLabel.Text = $"❌ GIF Load Error (retrying): {ex.Message}";
-                                _statusLabel.TextColor = Colors.Red;
+                                System.Diagnostics.Debug.WriteLine($"Failed to display GIF: {ex.Message}");
                             }
                         });
                     }
-                    // Check 3: Size is stable, but we're still inside the 1.0s waiting window.
-                    else if (gifInfo.Length > 0)
-                    {
-                        // Do nothing. Just wait for the stability window to pass.
-                    }
-
-                    return; // Do not proceed to other states if we're dealing with the final GIF.
+                    // If we get here, the file exists but the size hasn't been stable for long enough yet.
+                    return;
                 }
 
-                // STATE 3: CHECKING FOR LIVE PNG FRAMES (SIMULATION IS RUNNING).
+                // STATE 1: CHECKING FOR A LIVE FRAME.
                 if (File.Exists(_tempFramePath))
                 {
                     var frameInfo = new FileInfo(_tempFramePath);
+                    double frameAge = (DateTime.Now - frameInfo.LastWriteTime).TotalSeconds;
 
-                    // Use a 5-second tolerance to account for pauses in frame writes.
-                    if ((DateTime.Now - frameInfo.LastWriteTime).TotalSeconds < 5)
+                    // If the frame is fresh (< 5s old), the simulation is actively running.
+                    if (frameAge < 5.0)
                     {
                         Application.Instance.Invoke(() =>
                         {
-                            // Update image only if it's a new frame.
-                            if (frameInfo.LastWriteTime > _lastFrameWriteTime)
+                            // Only reload the frame if it's been modified since our last check
+                            if (frameInfo.LastWriteTime != _lastFrameWriteTime)
                             {
                                 try
                                 {
-                                    // Use shared read for live frames, as we *expect* them
-                                    // to be in use. This is fine for PNGs.
                                     byte[] pngBytes = ReadAllBytesShared(_tempFramePath);
                                     if (pngBytes != null && pngBytes.Length > 0)
                                     {
@@ -230,17 +239,11 @@ namespace LilyPadGH.Components
                                 }
                                 catch { }
                             }
-                            // Always update the status text to show activity.
-                            _statusLabel.Text = $"🔄 Simulation Running - Frame updated at {DateTime.Now:HH:mm:ss}";
-                            _statusLabel.TextColor = Colors.Blue;
                         });
                     }
-                    else // Frame exists but is old -> Simulation is likely finished and generating the GIF.
+                    else
                     {
-                        Application.Instance.Invoke(() => {
-                            _statusLabel.Text = "⏳ Generating Animation...";
-                            _statusLabel.TextColor = Colors.Orange;
-                        });
+                        // Frame exists but is old - simulation is generating GIF
                     }
                     return; // Don't fall through to idle state.
                 }
@@ -249,26 +252,16 @@ namespace LilyPadGH.Components
                 // This is the default state, only reached if no temp files are found.
                 Application.Instance.Invoke(() =>
                 {
-                    // Reset the WebView to the placeholder
                     _simulationView.LoadHtml(@"
                         <html><head><style>body{margin:0;padding:20px;background:#fff;display:flex;justify-content:center;align-items:center;height:100vh;font-family:Arial,sans-serif;overflow:hidden;}::-webkit-scrollbar{display:none;}html{scrollbar-width:none;-ms-overflow-style:none;}.placeholder{text-align:center;color:#888;}</style></head>
                         <body><div class='placeholder'><h2>Simulation View</h2><p>Waiting for Simulation</p></div></body></html>");
-
-                    if (DateTime.Now.Second % 2 == 0)
-                    {
-                        _statusLabel.Text = "⏳ Waiting for Simulation";
-                        _statusLabel.TextColor = Colors.Gray;
-                    }
                 });
             }
-            catch (IOException) { } // Safely ignore transient IO errors.
+            catch (IOException) { }
             catch (Exception ex)
             {
-                Application.Instance.Invoke(() =>
-                {
-                    _statusLabel.Text = $"⚠️ Error: {ex.Message}";
-                    _statusLabel.TextColor = Colors.Red;
-                });
+                // Log errors without updating UI
+                System.Diagnostics.Debug.WriteLine($"UpdateSimulationView Error: {ex.Message}");
             }
         }
 
@@ -293,24 +286,33 @@ namespace LilyPadGH.Components
 
         #endregion
 
-        // ========================
-        // Region: Server State Management
-        // ========================
+        // ====================================
+        // Part 5 — Server State Management
+        // ====================================
         #region Server State Management
 
         public void SetServerState(bool isServerRunning)
         {
             Application.Instance.Invoke(() =>
             {
-                _startServerButton.Enabled = !isServerRunning;
-                _stopServerButton.Enabled = isServerRunning;
+                // --- REVISION: Single Toggle Button Logic ---
+                // Note: This logic now controls the single _serverToggleButton
+                // instead of two separate buttons.
+                _serverToggleButton.Enabled = true; // Re-enable after "Starting..."/"Stopping..."
+                _serverToggleButton.Text = isServerRunning ? "Stop Server" : "Start Server";
+                _serverToggleButton.BackgroundColor = isServerRunning ? Colors.LightSalmon : SystemColors.Control;
+                // --- END REVISION ---
+
                 _applyAndRunButton.Enabled = isServerRunning;
-                _startServerButton.Text = isServerRunning ? "Server Running" : "Start Server";
-                _startServerButton.BackgroundColor = isServerRunning ? Colors.LightGreen : SystemColors.Control;
-                _applyAndRunButton.Text = isServerRunning ? "Apply Settings & Run" : "Start Server First";
+                _applyAndRunButton.Text = isServerRunning ? "Apply Settings && Run" : "Start Server First";
                 _applyAndRunButton.BackgroundColor = isServerRunning ? Colors.SteelBlue : Colors.Gray;
-                _statusLabel.Text = isServerRunning ? "✅ Julia Server Ready" : "⚠️ Server Stopped";
-                _statusLabel.TextColor = isServerRunning ? Colors.Blue : Colors.Gray;
+
+                string statusText = isServerRunning ? "✅ Julia Server Ready" : "Server Not Running";
+                string statusColor = isServerRunning ? "#4CAF50" : "#999";
+
+                _simulationView.LoadHtml($@"
+                    <html><head><style>body{{margin:0;padding:20px;background:#fff;display:flex;justify-content:center;align-items:center;height:100vh;font-family:Arial,sans-serif;overflow:hidden;}}::-webkit-scrollbar{{display:none;}}html{{scrollbar-width:none;-ms-overflow-style:none;}}.placeholder{{text-align:center;color:#888;}}</style></head>
+                    <body><div class='placeholder'><h2>Simulation View</h2><p>Waiting for Simulation</p><p style='color:{statusColor};font-size:0.9em;'>{statusText}</p></div></body></html>");
 
                 if (!isServerRunning)
                 {
@@ -321,9 +323,9 @@ namespace LilyPadGH.Components
 
         #endregion
 
-        // ========================
-        // Region: UI Construction
-        // ========================
+        // ==========================
+        // Part 6 — UI Construction
+        // ==========================
         #region UI Construction
 
         private void BuildUI()
@@ -331,26 +333,60 @@ namespace LilyPadGH.Components
             Title = "LilyPad CFD - Comprehensive Simulation Control";
             MinimumSize = new Size(1200, 800);
             Resizable = true;
+
             InitializeControls();
+
             _simulationView = new WebView { Size = new Size(500, 400) };
             _simulationView.LoadHtml(@"
                 <html><head><style>body{margin:0;padding:20px;background:#fff;display:flex;justify-content:center;align-items:center;height:100vh;font-family:Arial,sans-serif;overflow:hidden;}::-webkit-scrollbar{display:none;}html{scrollbar-width:none;-ms-overflow-style:none;}.placeholder{text-align:center;color:#888;}</style></head>
-                <body><div class='placeholder'><h2>Simulation View</h2><p>Waiting for Simulation</p></div></body></html>");
-            var mainLayout = new DynamicLayout { Padding = new Padding(10) };
+                <body><div class='placeholder'><h2>Simulation View</h2><p>Waiting for Simulation</p><p style='color:#999;font-size:0.9em;'>Server Not Running</p></div></body></html>");
+
+            // Note: This layout controls the *outer* padding of the window
+            // (Left, Top, Right, Bottom)
+            var mainLayout = new DynamicLayout { Padding = new Padding(16, 10, 10, 16) };
+
+            // --- REVISION ---
+            // Note: Added the horizontal line back.
+            // This is the correct way to add a separator in Eto.
+            mainLayout.Add(new Panel { BackgroundColor = Colors.Gainsboro, Height = 1 }, yscale: false);
+            // --- END REVISION ---
+
+            // 1. Create the TabControl first
+            var settingsTabs = CreateSettingsTabs();
+
+            // 2. Create a wrapper DynamicLayout to *hold* the tabs
+            var settingsPanelWrapper = new DynamicLayout
+            {
+                // 3. Set the independent padding for the settings panel here.
+                //    (Left, Top, Right, Bottom).
+                Padding = new Padding(0, 0, 0, 10)
+            };
+
+            // 4. Add the tabs to the wrapper and make them scale
+            settingsPanelWrapper.Add(settingsTabs, yscale: true);
+
+
             var contentSplitter = new Splitter
             {
-                Panel1 = CreateSettingsTabs(),
+                // 5. Assign the new *wrapper* to Panel1
+                Panel1 = settingsPanelWrapper,
                 Panel2 = CreateSimulationPanel(),
                 Position = 320,
-                Orientation = Orientation.Horizontal
+                Orientation = Orientation.Horizontal,
+                FixedPanel = SplitterFixedPanel.Panel1
             };
+
             mainLayout.Add(contentSplitter, yscale: true);
             mainLayout.Add(CreateButtonPanel(), yscale: false);
+
             Content = mainLayout;
         }
 
         private void InitializeControls()
         {
+            // ===========================================
+            // Part 6.1 — Control Initialisation
+            // ===========================================
             #region Control Initialization
             _fluidDensityStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 2, Width = 100 };
             _kinematicViscosityStepper = new NumericStepper { MinValue = 1e-9, MaxValue = 1e-3, DecimalPlaces = 9, Increment = 1e-7, Width = 100 };
@@ -358,40 +394,55 @@ namespace LilyPadGH.Components
             _reynoldsNumberStepper = new NumericStepper { MinValue = 1, DecimalPlaces = 1, Width = 100 };
             _calculateReButton = new Button { Text = "Calculate Re", Width = 100 };
             _calculateReButton.Click += (s, e) => _reynoldsNumberStepper.Value = (_inletVelocityStepper.Value * _characteristicLengthStepper.Value) / _kinematicViscosityStepper.Value;
+
             _domainWidthStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 2, Width = 100 };
             _domainHeightStepper = new NumericStepper { MinValue = 0.1, DecimalPlaces = 2, Width = 100 };
             _gridXStepper = new NumericStepper { MinValue = 10, Increment = 8, Width = 100 };
             _gridYStepper = new NumericStepper { MinValue = 10, Increment = 8, Width = 100 };
             _characteristicLengthStepper = new NumericStepper { MinValue = 0.001, DecimalPlaces = 4, Width = 100 };
+
             _timeStepStepper = new NumericStepper { MinValue = 0.0001, DecimalPlaces = 5, Width = 100 };
             _totalTimeStepper = new NumericStepper { MinValue = 0.1, MaxValue = 1000, DecimalPlaces = 1, Width = 100 };
             _cflNumberStepper = new NumericStepper { MinValue = 0.1, MaxValue = 1.0, DecimalPlaces = 2, Width = 100 };
             _calculateMaxDtButton = new Button { Text = "Calculate Max Δt", Width = 120 };
             _calculateMaxDtButton.Click += (s, e) => _timeStepStepper.Value = Math.Round(_cflNumberStepper.Value * (_domainWidthStepper.Value / _gridXStepper.Value) / _inletVelocityStepper.Value, 5);
+
             _maxIterationsStepper = new NumericStepper { MinValue = 10, Increment = 10, Width = 100 };
             _convergenceToleranceStepper = new NumericStepper { MinValue = 1e-10, MaxValue = 1e-2, DecimalPlaces = 10, Increment = 1e-6, Width = 100 };
             _relaxationFactorStepper = new NumericStepper { MinValue = 0.1, MaxValue = 1.0, DecimalPlaces = 2, Width = 100 };
+
             _curveDivisionsStepper = new NumericStepper { MinValue = 2, Increment = 1, Width = 100 };
             _simplifyToleranceStepper = new NumericStepper { MinValue = 0.0, MaxValue = 1.0, DecimalPlaces = 3, Increment = 0.01, Width = 100 };
             _maxPointsPerPolyStepper = new NumericStepper { MinValue = 5, MaxValue = 5000, Increment = 10, Width = 100 };
             _objectScaleFactorStepper = new NumericStepper { MinValue = 0.05, MaxValue = 0.95, DecimalPlaces = 2, Increment = 0.05, Width = 100 };
+
             _colorScaleMinStepper = new NumericStepper { MinValue = -100, MaxValue = 0, DecimalPlaces = 1, Width = 100 };
             _colorScaleMaxStepper = new NumericStepper { MinValue = 0, MaxValue = 100, DecimalPlaces = 1, Width = 100 };
             _animationFPSStepper = new NumericStepper { MinValue = 5, MaxValue = 60, Increment = 5, Width = 100 };
+
             _showBodyCheckBox = new CheckBox { Text = "Show Body" };
             _showVelocityCheckBox = new CheckBox { Text = "Show Velocity Vectors" };
             _showPressureCheckBox = new CheckBox { Text = "Show Pressure" };
             _showVorticityCheckBox = new CheckBox { Text = "Show Vorticity" };
+
             _waterLilyLStepper = new NumericStepper { MinValue = 16, MaxValue = 128, Increment = 8, Width = 100 };
             _useGPUCheckBox = new CheckBox { Text = "Use GPU (CUDA)" };
             _precisionTypeDropDown = new DropDown { Width = 100, Items = { "Float32", "Float64" }, SelectedIndex = 0 };
-            _statusLabel = new Label { Text = "Ready to start server", Font = new Font(SystemFont.Default, 10), TextColor = Colors.Gray, TextAlignment = TextAlignment.Center };
-            _startServerButton = new Button { Text = "Start Server", Width = 120 };
-            _stopServerButton = new Button { Text = "Stop Server", Width = 120, Enabled = false };
+
+            // --- REVISION: Button Consolidation ---
+            _serverToggleButton = new Button { Text = "Start Server", Width = 150 };
+            // Note: _startServerButton and _stopServerButton are removed.
+            // --- END REVISION ---
+
             _applyAndRunButton = new Button { Text = "Start Server First", Width = 150, Enabled = false, BackgroundColor = Colors.Gray };
-            _closeButton = new Button { Text = "Close", Width = 80 };
-            _startServerButton.Click += (s, e) => OnStartServerClicked?.Invoke();
-            _stopServerButton.Click += (s, e) => OnStopServerClicked?.Invoke();
+            _closeButton = new Button { Text = "Close", Width = 150 };
+
+            // --- REVISION: New Toggle Click Handler ---
+            // Note: We now point to a single handler that checks the
+            // button's state before firing the correct event.
+            _serverToggleButton.Click += OnServerToggleClick;
+            // --- END REVISION ---
+
             _applyAndRunButton.Click += OnApplyAndRunButtonClick;
             _closeButton.Click += (s, e) => Close();
             #endregion
@@ -399,16 +450,22 @@ namespace LilyPadGH.Components
 
         private Control CreateSettingsTabs()
         {
+            // ===========================================
+            // Part 6.2 — Settings Tabs Panel
+            // ===========================================
             var tabs = new TabControl();
+
             #region Tab: Flow & Domain
             var tab1 = new TabPage { Text = "Flow & Domain" };
-            var layout1 = new DynamicLayout { DefaultSpacing = new Size(5, 5), Padding = new Padding(10) };
+            var layout1 = new DynamicLayout { DefaultSpacing = new Size(5, 5), Padding = new Padding(10, 10, 10, 10) };
+
             layout1.Add(new Label { Text = "Fluid Properties", Font = new Font(SystemFont.Bold) });
             layout1.AddRow(new Label { Text = "Density (kg/m³):" }, _fluidDensityStepper);
             layout1.AddRow(new Label { Text = "Kinematic Viscosity (m²/s):" }, _kinematicViscosityStepper);
             layout1.AddRow(new Label { Text = "Inlet Velocity (m/s):" }, _inletVelocityStepper);
             layout1.AddRow(new Label { Text = "Reynolds Number:" }, _reynoldsNumberStepper);
             layout1.AddRow(null, _calculateReButton);
+
             layout1.AddSpace();
             layout1.Add(new Label { Text = "Domain Configuration", Font = new Font(SystemFont.Bold) });
             layout1.AddRow(new Label { Text = "Width (m):" }, _domainWidthStepper);
@@ -416,29 +473,35 @@ namespace LilyPadGH.Components
             layout1.AddRow(new Label { Text = "Grid Cells X:" }, _gridXStepper);
             layout1.AddRow(new Label { Text = "Grid Cells Y:" }, _gridYStepper);
             layout1.AddRow(new Label { Text = "Characteristic Length (m):" }, _characteristicLengthStepper);
+
             layout1.AddSpace();
             layout1.Add(new Label { Text = "Time Stepping", Font = new Font(SystemFont.Bold) });
             layout1.AddRow(new Label { Text = "Time Step (s):" }, _timeStepStepper);
             layout1.AddRow(new Label { Text = "Total Simulation Time (s):" }, _totalTimeStepper);
             layout1.AddRow(new Label { Text = "CFL Number:" }, _cflNumberStepper);
             layout1.AddRow(null, _calculateMaxDtButton);
+
             layout1.AddSpace();
             layout1.Add(new Label { Text = "Solver Settings", Font = new Font(SystemFont.Bold) });
             layout1.AddRow(new Label { Text = "Max Iterations:" }, _maxIterationsStepper);
             layout1.AddRow(new Label { Text = "Convergence Tolerance:" }, _convergenceToleranceStepper);
             layout1.AddRow(new Label { Text = "Relaxation Factor:" }, _relaxationFactorStepper);
+
             layout1.Add(null, yscale: true);
             tab1.Content = new Scrollable { Content = layout1, Border = BorderType.None };
             tabs.Pages.Add(tab1);
             #endregion
+
             #region Tab: Geometry & Viz
             var tab2 = new TabPage { Text = "Geometry & Viz" };
-            var layout2 = new DynamicLayout { DefaultSpacing = new Size(5, 5), Padding = new Padding(10) };
+            var layout2 = new DynamicLayout { DefaultSpacing = new Size(5, 5), Padding = new Padding(10, 10, 10, 10) };
+
             layout2.Add(new Label { Text = "Geometry Settings", Font = new Font(SystemFont.Bold) });
             layout2.AddRow(new Label { Text = "Curve Divisions:" }, _curveDivisionsStepper);
             layout2.AddRow(new Label { Text = "Simplify Tolerance:" }, _simplifyToleranceStepper);
             layout2.AddRow(new Label { Text = "Max Points/Polyline:" }, _maxPointsPerPolyStepper);
             layout2.AddRow(new Label { Text = "Object Scale (0-1):" }, _objectScaleFactorStepper);
+
             layout2.AddSpace();
             layout2.Add(new Label { Text = "Visualization Settings", Font = new Font(SystemFont.Bold) });
             layout2.AddRow(new Label { Text = "Color Min:" }, _colorScaleMinStepper);
@@ -448,36 +511,61 @@ namespace LilyPadGH.Components
             layout2.Add(_showVelocityCheckBox);
             layout2.Add(_showPressureCheckBox);
             layout2.Add(_showVorticityCheckBox);
+
             layout2.AddSpace();
             layout2.Add(new Label { Text = "Advanced Settings", Font = new Font(SystemFont.Bold) });
             layout2.AddRow(new Label { Text = "WaterLily L:" }, _waterLilyLStepper);
             layout2.AddRow(new Label { Text = "Precision:" }, _precisionTypeDropDown);
             layout2.Add(_useGPUCheckBox);
+
             layout2.Add(null, yscale: true);
             tab2.Content = new Scrollable { Content = layout2, Border = BorderType.None };
             tabs.Pages.Add(tab2);
             #endregion
+
             return tabs;
         }
 
         private Control CreateSimulationPanel()
         {
-            var layout = new DynamicLayout { Padding = new Padding(10) };
-            layout.Add(_simulationView, yscale: true);
-            layout.Add(_statusLabel, yscale: false);
-            return layout;
+            var content = new DynamicLayout { Padding = new Padding(10, 0, 0, 10) };
+            content.Add(_simulationView, yscale: true);
+
+            // TabControl has ~28px tab header, add matching top space
+            var container = new DynamicLayout { Padding = new Padding(0, 23, 10, 0) };
+            container.Add(content, yscale: true);
+
+            return container;
         }
 
         private Control CreateButtonPanel()
         {
-            return new TableLayout { Spacing = new Size(10, 5), Rows = { new TableRow(_startServerButton, _stopServerButton, new TableCell(null, true), _applyAndRunButton, _closeButton) } };
+            // All buttons on the right, with 10px padding from right edge to match simulation view
+            var buttonLayout = new TableLayout
+            {
+                Spacing = new Size(10, 5),
+                Rows = {
+                    new TableRow(
+                        new TableCell(null, true), // Elastic spacer pushes all buttons right
+                        // --- REVISION: Updated Button Layout ---
+                        _serverToggleButton,
+                        // Note: _stopServerButton removed from layout
+                        // --- END REVISION ---
+                        _applyAndRunButton,
+                        _closeButton
+                    )
+                },
+                Padding = new Padding(0, 0, 10, 0) // Right padding of 10 to match simulation view
+            };
+
+            return buttonLayout;
         }
 
         #endregion
 
-        // ========================
-        // Region: Settings Management
-        // ========================
+        // ==============================
+        // Part 7 — Settings Management
+        // ==============================
         #region Settings Management
 
         private void LoadSettingsIntoUI()
@@ -511,6 +599,7 @@ namespace LilyPadGH.Components
             _waterLilyLStepper.Value = _settings.WaterLilyL;
             _useGPUCheckBox.Checked = _settings.UseGPU;
             _precisionTypeDropDown.SelectedIndex = _settings.PrecisionType == "Float64" ? 1 : 0;
+
             SetServerState(false);
         }
 
@@ -550,9 +639,36 @@ namespace LilyPadGH.Components
         #endregion
 
         // ========================
-        // Region: Event Handlers
+        // Part 8 — Event Handlers
         // ========================
         #region Event Handlers
+
+        // --- REVISION: New Click Handler for Toggle Button ---
+        /// <summary>
+        /// Handles clicks for the single server toggle button.
+        /// Checks the button's current text to determine whether to
+        /// start or stop the server, then fires the appropriate event.
+        /// </summary>
+        private void OnServerToggleClick(object sender, EventArgs e)
+        {
+            // Note: We check the text to determine the current state
+            // and desired action.
+            if (_serverToggleButton.Text == "Start Server")
+            {
+                // Temporarily disable to prevent double-clicks
+                _serverToggleButton.Enabled = false;
+                _serverToggleButton.Text = "Starting...";
+                OnStartServerClicked?.Invoke();
+            }
+            else if (_serverToggleButton.Text == "Stop Server")
+            {
+                // Temporarily disable to prevent double-clicks
+                _serverToggleButton.Enabled = false;
+                _serverToggleButton.Text = "Stopping...";
+                OnStopServerClicked?.Invoke();
+            }
+        }
+        // --- END REVISION ---
 
         private void OnApplyAndRunButtonClick(object sender, EventArgs e)
         {
@@ -595,12 +711,8 @@ namespace LilyPadGH.Components
             string timeEstimate = totalCells < 10000 ? "< 1 min" : totalCells < 50000 ? "1-5 min" : totalCells < 100000 ? "5-15 min" : "> 15 min";
 
             OnApplyAndRunClicked?.Invoke(_settings);
-
-            _statusLabel.Text = $"🚀 Simulation Starting... Estimated time: {timeEstimate}";
-            _statusLabel.TextColor = Colors.Blue;
         }
 
-        // --- NEW FUNCTION ---
         /// <summary>
         /// Scans the temp directory and deletes the oldest GIFs if the count exceeds 10.
         /// </summary>
@@ -665,9 +777,9 @@ namespace LilyPadGH.Components
 
         #endregion
 
-        // ========================
-        // Region: Cleanup
-        // ========================
+        // ================
+        // Part 9 — Cleanup
+        // ================
         #region Cleanup
 
         protected override void OnClosed(EventArgs e)
@@ -697,9 +809,9 @@ namespace LilyPadGH.Components
         }
         #endregion
 
-        // ========================
-        // Region: Public Properties
-        // ========================
+        // =============================
+        // Part 10 — Public Properties
+        // =============================
         #region Public Properties
         public string UIFramePath => _tempFramePath;
         public string UIGifPath => _tempGifPath;
