@@ -3,6 +3,31 @@ REM ============================================================
 REM LilyPad-GH Package Installer
 REM Double-click this file to install required Julia packages
 REM ============================================================
+REM
+REM MANUAL INSTALLATION (if this script doesn't work):
+REM --------------------------------------------------
+REM 1. Open Julia from command line or Start menu
+REM 2. Press ] to enter package mode (prompt changes to pkg>)
+REM 3. Type these commands one at a time:
+REM      add HTTP
+REM      add JSON3
+REM      add Plots
+REM      add StaticArrays
+REM      add WaterLily
+REM      add ParametricBodies
+REM 4. Press Backspace to exit package mode
+REM 5. Type: using Pkg; Pkg.precompile()
+REM 6. Close Julia
+REM
+REM INSTALLING JULIA (if not installed):
+REM ------------------------------------
+REM 1. Go to https://julialang.org/downloads/
+REM 2. Download Julia 1.10 or newer (1.11.7 recommended)
+REM 3. Run the installer
+REM 4. Default location: %LocalAppData%\Programs\Julia-1.11.7\
+REM 5. After installation, run this script again
+REM
+REM ============================================================
 
 echo.
 echo ============================================================
@@ -46,13 +71,24 @@ if exist "%LocalAppData%\Programs\Julia-1.10\bin\julia.exe" (
 )
 
 REM Julia not found
+echo ============================================================
 echo ERROR: Julia not found!
+echo ============================================================
 echo.
-echo Please install Julia from https://julialang.org/downloads/
-echo Or ensure Julia is installed in one of these locations:
+echo Julia is required to run LilyPad-GH simulations.
+echo.
+echo TO INSTALL JULIA:
+echo   1. Go to https://julialang.org/downloads/
+echo   2. Download Julia 1.10 or newer (1.11.7 recommended)
+echo   3. Run the installer (use default settings)
+echo   4. Run this script again after installation
+echo.
+echo Expected locations:
 echo   - %LocalAppData%\Programs\Julia-1.11.7\
 echo   - %LocalAppData%\Programs\Julia-1.11\
 echo   - %LocalAppData%\Programs\Julia-1.10\
+echo.
+echo ============================================================
 echo.
 pause
 exit /b 1
@@ -62,17 +98,31 @@ echo Using Julia: %JULIA_EXE%
 echo.
 echo Installing packages... This may take 5-10 minutes on first run.
 echo.
+echo If this fails, you can install packages manually:
+echo   1. Open Julia
+echo   2. Press ] to enter package mode
+echo   3. Type: add HTTP
+echo   4. Type: add JSON3
+echo   5. Type: add Plots
+echo   6. Type: add StaticArrays
+echo   7. Type: add WaterLily
+echo   8. Type: add ParametricBodies
+echo   9. Press Backspace, then type: using Pkg; Pkg.precompile()
+echo.
 
 "%JULIA_EXE%" "%~dp0install_packages.jl"
 
 if errorlevel 1 (
     echo.
-    echo ERROR: Package installation failed!
-    echo See error messages above.
-    pause
-    exit /b 1
+    echo ============================================================
+    echo WARNING: Package installation may have had issues.
+    echo ============================================================
+    echo.
+    echo If you see errors above, try manual installation:
+    echo   1. Open Julia from Start menu
+    echo   2. Follow the manual steps shown above
+    echo.
 )
 
 echo.
-echo Installation complete!
 pause
