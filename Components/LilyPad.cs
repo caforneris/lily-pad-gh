@@ -81,6 +81,9 @@ namespace LilyPadGH.Components
 
             // NOTE: New output for Julia script results.
             pManager.AddTextParameter("Julia Output", "JO", "Output from the executed Julia script", GH_ParamAccess.item);
+
+            // Julia path debug output
+            pManager.AddTextParameter("Julia Paths", "JP", "Julia executable and script paths being used", GH_ParamAccess.item);
         }
 
         public override void CreateAttributes()
@@ -272,6 +275,9 @@ namespace LilyPadGH.Components
             // --- JULIA INTEGRATION (Manual via server buttons) ---
             string juliaOutput = _isServerRunning ? "Server is running. Use 'Push Data to Server' button." : "Julia server not started. Use dialog to start server.";
 
+            // --- Build Julia Path Debug Info ---
+            string juliaPathInfo = GetJuliaPathDebugInfo();
+
             // --- Output Assignment ---
             DA.SetData(0, _status);
             DA.SetData(1, parameters);
@@ -280,6 +286,7 @@ namespace LilyPadGH.Components
             DA.SetData(4, curveJsonString);
             DA.SetDataList(5, curvePoints);
             DA.SetData(6, juliaOutput); // Set the new Julia output
+            DA.SetData(7, juliaPathInfo); // Set Julia paths debug output
 
             // Update component message on canvas
             Message = _isRunning ? "Running..." : (_isServerRunning ? "Ready" : "Configured");
@@ -563,6 +570,77 @@ namespace LilyPadGH.Components
         // JULIA PATH DETECTION METHODS
         // ========================================
 
+        private string GetJuliaPathDebugInfo()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("=== JULIA PATH RESOLUTION ===");
+            sb.AppendLine();
+
+            // Custom path check
+            sb.AppendLine("[1] CUSTOM PATH:");
+            if (!string.IsNullOrEmpty(_customJuliaPath))
+            {
+                string customPath = Path.Combine(_customJuliaPath, "bin", "julia.exe");
+                bool exists = File.Exists(customPath);
+                sb.AppendLine($"    Path: {customPath}");
+                sb.AppendLine($"    Exists: {exists}");
+                if (exists) sb.AppendLine($"    >>> USING THIS PATH <<<");
+            }
+            else
+            {
+                sb.AppendLine("    (Not provided)");
+            }
+            sb.AppendLine();
+
+            // System installation check
+            sb.AppendLine("[2] SYSTEM INSTALL PATHS:");
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string[] possibleJuliaVersions = { "Julia-1.11.7", "Julia-1.11.6", "Julia-1.11.5", "Julia-1.11", "Julia-1.10" };
+            bool foundSystem = false;
+            foreach (var version in possibleJuliaVersions)
+            {
+                string juliaPath = Path.Combine(localAppData, "Programs", version, "bin", "julia.exe");
+                bool exists = File.Exists(juliaPath);
+                sb.AppendLine($"    {version}: {(exists ? "FOUND" : "not found")}");
+                sb.AppendLine($"        {juliaPath}");
+                if (exists && !foundSystem)
+                {
+                    sb.AppendLine($"        >>> USING THIS PATH <<<");
+                    foundSystem = true;
+                }
+            }
+            sb.AppendLine();
+
+            // Bundled Julia check
+            sb.AppendLine("[3] BUNDLED JULIA:");
+            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string bundledJulia = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "julia-1.11.7", "bin", "julia.exe");
+            bool bundledExists = File.Exists(bundledJulia);
+            sb.AppendLine($"    GHA Directory: {ghaDirectory}");
+            sb.AppendLine($"    Bundled Path: {bundledJulia}");
+            sb.AppendLine($"    Exists: {bundledExists}");
+            if (bundledExists && !foundSystem && string.IsNullOrEmpty(_customJuliaPath))
+            {
+                sb.AppendLine($"    >>> USING THIS PATH <<<");
+            }
+            sb.AppendLine();
+
+            // Script path
+            sb.AppendLine("[4] SERVER SCRIPT PATH:");
+            try
+            {
+                string scriptPath = GetServerScriptPath();
+                sb.AppendLine($"    {scriptPath}");
+                sb.AppendLine($"    Exists: {File.Exists(scriptPath)}");
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine($"    ERROR: {ex.Message}");
+            }
+
+            return sb.ToString();
+        }
+
         private string GetJuliaExecutablePath()
         {
             // First, check if a custom path has been set
@@ -591,7 +669,7 @@ namespace LilyPadGH.Components
 
             // Third, check the bundled Julia in the plugin directory
             string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-            string bundledJulia = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "bin", "julia.exe");
+            string bundledJulia = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "julia-1.11.7", "bin", "julia.exe");
 
             if (File.Exists(bundledJulia))
             {
