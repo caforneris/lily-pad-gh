@@ -64,11 +64,11 @@
   </PropertyGroup>
   
   <ItemGroup>
-    <None Remove="Icons\CFDAnalysisIcon.png" />
+    <None Remove="Icons\lily-pad-icon.png" />
   </ItemGroup>
-  
+
   <ItemGroup>
-    <EmbeddedResource Include="Icons\CFDAnalysisIcon.png" />
+    <EmbeddedResource Include="Icons\lily-pad-icon.png" />
   </ItemGroup>
   
   <!-- Package references -->

@@ -726,7 +726,7 @@ namespace LilyPadGH.Components
             {
                 try
                 {
-                    var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("LilyPadGH.Icons.CFDAnalysisIcon.png");
+                    var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("LilyPadGH.Icons.lily-pad-icon.png");
                     return stream != null ? new GH_Bitmap(stream) : null;
                 }
                 catch
