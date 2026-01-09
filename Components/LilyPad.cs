@@ -269,8 +269,9 @@ namespace LilyPadGH.Components
                 }
             }
 
-            // Store the current curves JSON for server pushing
+            // Store the current curves JSON and boundary for server pushing
             _currentCurvesJson = curveJsonString;
+            _currentBoundary = boundary;
 
             // --- JULIA INTEGRATION (Manual via server buttons) ---
             string juliaOutput = _isServerRunning ? "Server is running. Use 'Push Data to Server' button." : "Julia server not started. Use dialog to start server.";
@@ -440,6 +441,9 @@ namespace LilyPadGH.Components
             }
         }
 
+        // Store the current boundary for server pushing
+        private Rectangle3d _currentBoundary = Rectangle3d.Unset;
+
         private void HandleApplyParametersClicked(LilyPadCfdSettings newSettings)
         {
             if (!_isServerRunning)
@@ -480,6 +484,16 @@ namespace LilyPadGH.Components
                             plot_body = _settings.PlotBody,
                             simplify_tolerance = _settings.SimplifyTolerance,
                             max_points_per_poly = _settings.MaxPointsPerPoly
+                        },
+                        // Include user-defined domain bounds - simulation should respect these even if geometry extends beyond
+                        domain = new
+                        {
+                            x_min = _currentBoundary.Corner(0).X,
+                            y_min = _currentBoundary.Corner(0).Y,
+                            x_max = _currentBoundary.Corner(2).X,
+                            y_max = _currentBoundary.Corner(2).Y,
+                            width = _currentBoundary.Width,
+                            height = _currentBoundary.Height
                         },
                         polylines = JsonSerializer.Deserialize<JsonElement>(_currentCurvesJson).GetProperty("polylines")
                     };

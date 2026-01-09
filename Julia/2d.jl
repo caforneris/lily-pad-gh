@@ -164,8 +164,9 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
 
     println("running")
 
-    # Extract point reduction parameters from JSON
+    # Extract point reduction parameters and domain bounds from JSON
     local simplify_tolerance, max_points_per_poly
+    local user_domain = nothing  # Will hold user-defined domain if provided
     try
         data = JSON3.read(raw_string)
         if haskey(data, :simulation_parameters)
@@ -176,6 +177,22 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
             simplify_tolerance = T(0.0)  # No simplification by default
             max_points_per_poly = 1000  # Very high limit by default
         end
+
+        # Check for user-defined domain bounds
+        if haskey(data, :domain)
+            domain_data = data.domain
+            user_domain = (
+                x_min = T(get(domain_data, :x_min, 0.0)),
+                y_min = T(get(domain_data, :y_min, 0.0)),
+                x_max = T(get(domain_data, :x_max, 1.0)),
+                y_max = T(get(domain_data, :y_max, 1.0)),
+                width = T(get(domain_data, :width, 1.0)),
+                height = T(get(domain_data, :height, 1.0))
+            )
+            println("📐 User-defined domain: ($(user_domain.x_min), $(user_domain.y_min)) to ($(user_domain.x_max), $(user_domain.y_max))")
+            println("   Domain size: $(user_domain.width) x $(user_domain.height)")
+        end
+
         println("🔧 Point reduction: tolerance=$simplify_tolerance, max_points=$max_points_per_poly")
     catch e
         println("⚠️  Could not extract point reduction params: $e")
@@ -233,23 +250,56 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
                 throw("No points found in any polyline")
             end
 
-            x_min, x_max = extrema(all_px)
-            y_min, y_max = extrema(all_py)
+            # Get geometry bounds for reference
+            geom_x_min, geom_x_max = extrema(all_px)
+            geom_y_min, geom_y_max = extrema(all_py)
+            println("🔧 Geometry bounds: ($geom_x_min,$geom_y_min) to ($geom_x_max,$geom_y_max)")
 
-            # Scale to simulation domain and center - less aggressive scaling
+            # Simulation grid dimensions
             domain_width = 8L
             domain_height = 4L
 
-            # Use more reasonable scaling that preserves object size better
-            scale_x = (domain_width * 0.3) / (x_max - x_min)  # Use 30% of domain width
-            scale_y = (domain_height * 0.3) / (y_max - y_min)  # Use 30% of domain height
-            scale = T(min(scale_x, scale_y))  # Use smaller scale to fit both dimensions
+            # Use user-defined domain bounds if available, otherwise use geometry bounds
+            if user_domain !== nothing
+                # User has specified a domain - use those bounds for mapping
+                # This allows geometry to extend beyond the simulation domain
+                x_min = user_domain.x_min
+                y_min = user_domain.y_min
+                x_max = user_domain.x_max
+                y_max = user_domain.y_max
 
-            cx = T(domain_width / 2)   # center x
-            cy = T(domain_height / 2)  # center y
+                println("📐 Using USER-DEFINED domain bounds (geometry may extend beyond)")
+                println("   Simulation will only compute within: ($x_min,$y_min) to ($x_max,$y_max)")
 
-            println("🔧 Scaling: object bounds ($x_min,$y_min) to ($x_max,$y_max)")
-            println("🔧 Domain: $(domain_width)×$(domain_height), scale factor: $scale")
+                # Check if geometry extends beyond domain
+                if geom_x_min < x_min || geom_x_max > x_max || geom_y_min < y_min || geom_y_max > y_max
+                    println("   ⚠️  Geometry extends beyond domain - will be clipped in simulation")
+                end
+
+                # Scale to map user domain to simulation grid (1:1 mapping, domain fills grid)
+                scale_x = domain_width / (x_max - x_min)
+                scale_y = domain_height / (y_max - y_min)
+                scale = T(min(scale_x, scale_y))  # Uniform scaling to preserve aspect ratio
+            else
+                # No user domain - fall back to geometry bounds with padding
+                x_min = geom_x_min
+                y_min = geom_y_min
+                x_max = geom_x_max
+                y_max = geom_y_max
+
+                println("📐 Using GEOMETRY bounds (auto-fit to domain)")
+
+                # Use more reasonable scaling that preserves object size better
+                scale_x = (domain_width * 0.3) / (x_max - x_min)  # Use 30% of domain width
+                scale_y = (domain_height * 0.3) / (y_max - y_min)  # Use 30% of domain height
+                scale = T(min(scale_x, scale_y))  # Use smaller scale to fit both dimensions
+            end
+
+            cx = T(domain_width / 2)   # center x in simulation grid
+            cy = T(domain_height / 2)  # center y in simulation grid
+
+            println("🔧 Domain bounds: ($x_min,$y_min) to ($x_max,$y_max)")
+            println("🔧 Simulation grid: $(domain_width)×$(domain_height), scale factor: $scale")
 
             # Create optimized SDF function for multiple polylines (union)
             @fastmath @inline function multi_poly_sdf(x, t)
@@ -320,24 +370,47 @@ function make_sim(raw_string::AbstractString; L=2^5,U=1,Re=100,mem=Array,T=Float
             px = [T(p["x"]) for p in points]
             py = [T(p["y"]) for p in points]
 
-            # Find bounds
-            x_min, x_max = extrema(px)
-            y_min, y_max = extrema(py)
+            # Get geometry bounds
+            geom_x_min, geom_x_max = extrema(px)
+            geom_y_min, geom_y_max = extrema(py)
 
-            # Scale to simulation domain and center - less aggressive scaling
+            # Simulation grid dimensions
             domain_width = 8L
             domain_height = 4L
 
-            # Use more reasonable scaling that preserves object size better
-            scale_x = (domain_width * 0.3) / (x_max - x_min)  # Use 30% of domain width
-            scale_y = (domain_height * 0.3) / (y_max - y_min)  # Use 30% of domain height
-            scale = min(scale_x, scale_y)  # Use smaller scale to fit both dimensions
+            # Use user-defined domain bounds if available, otherwise use geometry bounds
+            if user_domain !== nothing
+                # User has specified a domain - use those bounds for mapping
+                x_min = user_domain.x_min
+                y_min = user_domain.y_min
+                x_max = user_domain.x_max
+                y_max = user_domain.y_max
+
+                println("📐 Using USER-DEFINED domain bounds (legacy mode)")
+
+                # Scale to map user domain to simulation grid
+                scale_x = domain_width / (x_max - x_min)
+                scale_y = domain_height / (y_max - y_min)
+                scale = min(scale_x, scale_y)
+            else
+                # Fall back to geometry bounds
+                x_min = geom_x_min
+                y_min = geom_y_min
+                x_max = geom_x_max
+                y_max = geom_y_max
+
+                # Use more reasonable scaling that preserves object size better
+                scale_x = (domain_width * 0.3) / (x_max - x_min)  # Use 30% of domain width
+                scale_y = (domain_height * 0.3) / (y_max - y_min)  # Use 30% of domain height
+                scale = min(scale_x, scale_y)  # Use smaller scale to fit both dimensions
+            end
 
             cx = domain_width / 2   # center x
             cy = domain_height / 2  # center y
 
-            println("🔧 Legacy scaling: object bounds ($x_min,$y_min) to ($x_max,$y_max)")
-            println("🔧 Domain: $(domain_width)×$(domain_height), scale factor: $scale")
+            println("🔧 Legacy scaling: object bounds ($geom_x_min,$geom_y_min) to ($geom_x_max,$geom_y_max)")
+            println("🔧 Domain bounds: ($x_min,$y_min) to ($x_max,$y_max)")
+            println("🔧 Simulation grid: $(domain_width)×$(domain_height), scale factor: $scale")
 
             # Simple polygon SDF using point-in-polygon
             function poly_sdf(x, t)
