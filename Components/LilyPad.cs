@@ -501,7 +501,7 @@ namespace LilyPadGH.Components
                     string jsonData = JsonSerializer.Serialize(serverData, new JsonSerializerOptions { WriteIndented = true });
 
                     using var client = new HttpClient();
-                    client.Timeout = TimeSpan.FromSeconds(30);
+                    client.Timeout = TimeSpan.FromMinutes(30); // Allow up to 30 minutes for long simulations
                     var content = new StringContent(jsonData, Encoding.UTF8, "application/json");
                     var response = await client.PostAsync("http://localhost:8080/", content);
 
@@ -588,17 +588,44 @@ namespace LilyPadGH.Components
         {
             var sb = new StringBuilder();
             sb.AppendLine("=== JULIA PATH RESOLUTION ===");
+            sb.AppendLine("Priority: Bundled -> Custom -> System");
             sb.AppendLine();
 
-            // Custom path check
-            sb.AppendLine("[1] CUSTOM PATH:");
+            // Track which path will actually be used
+            string selectedPath = null;
+
+            // Priority 1: Bundled Julia
+            sb.AppendLine("[1] BUNDLED JULIA (Priority 1 - highest):");
+            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string bundledJulia = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "julia-1.11.7", "bin", "julia.exe");
+            bool bundledExists = File.Exists(bundledJulia);
+            sb.AppendLine($"    GHA Directory: {ghaDirectory}");
+            sb.AppendLine($"    Path: {bundledJulia}");
+            sb.AppendLine($"    Exists: {bundledExists}");
+            if (bundledExists)
+            {
+                selectedPath = bundledJulia;
+                sb.AppendLine($"    >>> USING THIS PATH <<<");
+            }
+            sb.AppendLine();
+
+            // Priority 2: Custom path
+            sb.AppendLine("[2] CUSTOM PATH (Priority 2):");
             if (!string.IsNullOrEmpty(_customJuliaPath))
             {
                 string customPath = Path.Combine(_customJuliaPath, "bin", "julia.exe");
                 bool exists = File.Exists(customPath);
                 sb.AppendLine($"    Path: {customPath}");
                 sb.AppendLine($"    Exists: {exists}");
-                if (exists) sb.AppendLine($"    >>> USING THIS PATH <<<");
+                if (exists && selectedPath == null)
+                {
+                    selectedPath = customPath;
+                    sb.AppendLine($"    >>> USING THIS PATH <<<");
+                }
+                else if (exists)
+                {
+                    sb.AppendLine($"    (skipped - bundled Julia found)");
+                }
             }
             else
             {
@@ -606,37 +633,31 @@ namespace LilyPadGH.Components
             }
             sb.AppendLine();
 
-            // System installation check
-            sb.AppendLine("[2] SYSTEM INSTALL PATHS:");
+            // Priority 3: System installation
+            sb.AppendLine("[3] SYSTEM INSTALL (Priority 3 - fallback):");
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string[] possibleJuliaVersions = { "Julia-1.11.7", "Julia-1.11.6", "Julia-1.11.5", "Julia-1.11", "Julia-1.10" };
-            bool foundSystem = false;
             foreach (var version in possibleJuliaVersions)
             {
                 string juliaPath = Path.Combine(localAppData, "Programs", version, "bin", "julia.exe");
                 bool exists = File.Exists(juliaPath);
                 sb.AppendLine($"    {version}: {(exists ? "FOUND" : "not found")}");
                 sb.AppendLine($"        {juliaPath}");
-                if (exists && !foundSystem)
+                if (exists && selectedPath == null)
                 {
+                    selectedPath = juliaPath;
                     sb.AppendLine($"        >>> USING THIS PATH <<<");
-                    foundSystem = true;
+                }
+                else if (exists)
+                {
+                    sb.AppendLine($"        (skipped - higher priority path found)");
                 }
             }
             sb.AppendLine();
 
-            // Bundled Julia check
-            sb.AppendLine("[3] BUNDLED JULIA:");
-            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-            string bundledJulia = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "julia-1.11.7", "bin", "julia.exe");
-            bool bundledExists = File.Exists(bundledJulia);
-            sb.AppendLine($"    GHA Directory: {ghaDirectory}");
-            sb.AppendLine($"    Bundled Path: {bundledJulia}");
-            sb.AppendLine($"    Exists: {bundledExists}");
-            if (bundledExists && !foundSystem && string.IsNullOrEmpty(_customJuliaPath))
-            {
-                sb.AppendLine($"    >>> USING THIS PATH <<<");
-            }
+            // Summary
+            sb.AppendLine("=== SELECTED PATH ===");
+            sb.AppendLine(selectedPath ?? "ERROR: No Julia installation found!");
             sb.AppendLine();
 
             // Script path
@@ -657,7 +678,16 @@ namespace LilyPadGH.Components
 
         private string GetJuliaExecutablePath()
         {
-            // First, check if a custom path has been set
+            // Priority 1: Check bundled Julia in the plugin directory (preferred for consistency)
+            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string bundledJulia = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "julia-1.11.7", "bin", "julia.exe");
+
+            if (File.Exists(bundledJulia))
+            {
+                return bundledJulia;
+            }
+
+            // Priority 2: Check if a custom path has been provided
             if (!string.IsNullOrEmpty(_customJuliaPath))
             {
                 string juliaPath = Path.Combine(_customJuliaPath, "bin", "julia.exe");
@@ -667,27 +697,17 @@ namespace LilyPadGH.Components
                 }
             }
 
-            // Second, check the user's AppData\Local\Programs for Julia installation
+            // Priority 3: Fallback to system installation in AppData\Local\Programs
             string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             string[] possibleJuliaVersions = { "Julia-1.11.7", "Julia-1.11.6", "Julia-1.11.5", "Julia-1.11", "Julia-1.10" };
 
             foreach (var version in possibleJuliaVersions)
             {
-                // Check the exact structure: AppData\Local\Programs\Julia-1.11.7\bin\julia.exe
                 string juliaPath = Path.Combine(localAppData, "Programs", version, "bin", "julia.exe");
                 if (File.Exists(juliaPath))
                 {
                     return juliaPath;
                 }
-            }
-
-            // Third, check the bundled Julia in the plugin directory
-            string ghaDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-            string bundledJulia = Path.Combine(ghaDirectory, "JuliaPackage", "julia-1.11.7-win64", "julia-1.11.7", "bin", "julia.exe");
-
-            if (File.Exists(bundledJulia))
-            {
-                return bundledJulia;
             }
 
             // If we get here, no Julia installation was found
