@@ -3,6 +3,30 @@ REM ============================================================
 REM LilyPad-GH Full Installer
 REM Installs plugin, Julia runtime, packages, and configures PATH
 REM ============================================================
+REM
+REM DISTRIBUTION FOLDER STRUCTURE:
+REM ------------------------------
+REM LilyPadGH_Distribution/
+REM +-- Install_LilyPadGH.bat     # This file - double-click to install
+REM +-- README.txt                # Installation instructions
+REM +-- Plugin/
+REM |   +-- LilyPadGH.gha         # Grasshopper plugin
+REM |   +-- Julia/                # Scripts + package installer
+REM +-- JuliaPackage/             # Bundled Julia 1.11.7 runtime
+REM +-- JuliaDepot/               # Pre-packaged packages (optional ~5GB)
+REM
+REM WHAT THIS INSTALLER DOES:
+REM -------------------------
+REM [1/4] Install plugin to Grasshopper packages folder
+REM [2/4] Install bundled Julia runtime
+REM [3/4] Add Julia to user PATH environment variable
+REM [4/4] Install Julia packages (from depot or via script)
+REM
+REM REQUIRED JULIA PACKAGES:
+REM   HTTP, JSON3, Plots, StaticArrays, WaterLily, ParametricBodies
+REM
+REM See INSTALL_GUIDE.md for full documentation
+REM ============================================================
 setlocal enabledelayedexpansion
 
 echo.
