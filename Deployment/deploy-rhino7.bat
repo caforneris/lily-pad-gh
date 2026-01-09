@@ -51,3 +51,4 @@ REM The master deploy.bat script will handle deletion after all deployments
 echo.
 echo ✓ Rhino 7 deployment complete
 echo ═══════════════════════════════════════════════════════════════════════════
+exit /b 0
