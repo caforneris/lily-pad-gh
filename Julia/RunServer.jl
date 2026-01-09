@@ -1,6 +1,16 @@
 include("2d.jl")
 using HTTP
 
+# Print Julia environment info for debugging
+println("=" ^ 50)
+println("🔧 JULIA ENVIRONMENT INFO")
+println("=" ^ 50)
+println("Julia Version: ", VERSION)
+println("Julia Executable: ", Base.julia_cmd().exec[1])
+println("DEPOT_PATH: ", join(DEPOT_PATH, "\n             "))
+println("Working Directory: ", pwd())
+println("=" ^ 50)
+
 # Global flag to control server shutdown
 const SERVER_RUNNING = Ref(true)
 
@@ -40,6 +50,7 @@ function handle_request(req::HTTP.Request)
         return HTTP.Response(404, "Unknown endpoint. Use POST / or GET /status or GET /shutdown")
     end
 end
+
 
 # Start the server on localhost:8080 with proper shutdown handling
 println("🚀 Starting Julia HTTP server on localhost:8080")
